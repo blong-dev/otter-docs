@@ -10,6 +10,7 @@ from otter_docs.clients import (
     OllamaLLMClient,
 )
 from otter_docs.describe import Describer, Description, SqliteDescriptionCache
+from otter_docs.enrich import EnrichReport, Enricher
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -29,6 +30,8 @@ __all__ = [
     "Describer",
     "Description",
     "Edge",
+    "EnrichReport",
+    "Enricher",
     "EmbeddingClient",
     "FakeEmbeddingClient",
     "FakeLLMClient",

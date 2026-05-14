@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from otter_docs.backends import GraphBackend, SqliteBackend
+from otter_docs.clients.base import EmbeddingClient, LLMClient
+from otter_docs.describe import DescriptionCache, SqliteDescriptionCache
 from otter_docs.discovery import is_tsx, iter_source_files
+from otter_docs.enrich import EnrichReport, Enricher
 from otter_docs.models import Edge, Language
 from otter_docs.parsers import parse_file
 from otter_docs.parsers.typescript import TSX_PARSER
@@ -79,6 +82,11 @@ class Repo:
             backend = SqliteBackend(data_dir / "graph.db")
         self._backend = backend
         self._backend.connect()
+        # Lazily-initialized description cache, scoped to this Repo
+        # instance. When the backend is SqliteBackend we reuse its
+        # connection so descriptions live in the same file as the
+        # graph; for other backends we fall back to an in-memory dict.
+        self._description_cache: DescriptionCache | None = None
 
     # ── functional in phase 1 ────────────────────────────────────────
 
@@ -177,6 +185,64 @@ class Repo:
         edge writes during exploration.
         """
         self._backend._add_edge_with_repo(edge, repo=self.name)
+
+    def enrich(
+        self,
+        llm: LLMClient,
+        embedder: EmbeddingClient,
+        *,
+        description_cache: DescriptionCache | None = None,
+    ) -> EnrichReport:
+        """Three-vector enrichment over every symbol the graph knows about.
+
+        For each module/function/class:
+          - Generate an LLM description (cached by source content hash).
+          - Embed three texts: description, code slice, docstring.
+          - Upsert the record back into the backend with the three vectors.
+
+        Idempotent — re-running over unchanged code re-uses cached
+        descriptions and reproduces the same vectors. Call this after
+        `scan()` or pass a `embed=...`-shaped helper later when we
+        consolidate the API surface.
+
+        Parameters
+        ----------
+        llm :
+            LLMClient implementation. Use FakeLLMClient for tests,
+            OllamaLLMClient for local-model runs, or any custom client
+            that follows the Protocol.
+        embedder :
+            EmbeddingClient. Its `.dim` must match this repo's backend
+            vector_dim — otherwise the backend will raise.
+        description_cache :
+            Optional explicit description cache. If omitted, the
+            describer uses an ephemeral in-memory cache. Pass a
+            `SqliteDescriptionCache` bound to a long-lived connection
+            for persistent caching across runs.
+        """
+        cache = description_cache or self._default_description_cache()
+        enricher = Enricher(
+            self._backend, llm, embedder, description_cache=cache
+        )
+        return enricher.enrich_repo(self.name, self.root)
+
+    def _default_description_cache(self) -> DescriptionCache:
+        """Return (and memoize) this repo's default description cache.
+
+        When the backend is SqliteBackend, descriptions piggy-back on
+        the same connection so they persist alongside the graph. For
+        other backends (Neo4j, custom), we fall back to a per-Repo
+        in-memory dict — callers who want persistence there should
+        pass an explicit `description_cache=`.
+        """
+        if self._description_cache is not None:
+            return self._description_cache
+        if isinstance(self._backend, SqliteBackend):
+            self._description_cache = SqliteDescriptionCache(self._backend.conn)
+        else:
+            from otter_docs.describe import _DictCache
+            self._description_cache = _DictCache()
+        return self._description_cache
 
     def findings(self, **_filters: object) -> list[object]:
         """Run detectors against the indexed graph; return list[Finding].

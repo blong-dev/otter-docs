@@ -105,10 +105,9 @@ def test_repo_scan_reset_clears_stale(tmp_path: Path):
         assert list(repo.graph.list_modules(repo.name)) == []
 
 
-def test_repo_findings_stub_raises(tmp_path: Path):
+def test_repo_findings_empty_returns_empty_list(tmp_path: Path):
     with Repo(tmp_path) as repo:
-        with pytest.raises(NotImplementedError, match="phase"):
-            repo.findings()
+        assert repo.findings() == []
 
 
 def test_repo_render_stub_raises(tmp_path: Path):

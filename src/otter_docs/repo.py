@@ -15,7 +15,10 @@ from otter_docs.backends import GraphBackend, SqliteBackend
 from otter_docs.clients.base import EmbeddingClient, LLMClient
 from otter_docs.describe import DescriptionCache, SqliteDescriptionCache
 from otter_docs.discovery import is_tsx, iter_source_files
+from otter_docs.detectors import run_all as _run_detectors
+from otter_docs.detectors.base import CostTier
 from otter_docs.enrich import EnrichReport, Enricher
+from otter_docs.findings import Finding
 from otter_docs.models import Edge, Language
 from otter_docs.parsers import parse_file
 from otter_docs.parsers.typescript import TSX_PARSER
@@ -244,13 +247,33 @@ class Repo:
             self._description_cache = _DictCache()
         return self._description_cache
 
-    def findings(self, **_filters: object) -> list[object]:
-        """Run detectors against the indexed graph; return list[Finding].
+    def findings(
+        self,
+        *,
+        kinds: set[str] | None = None,
+        cost_tiers: set[CostTier] | None = None,
+    ) -> list[Finding]:
+        """Run registered detectors against this repo's graph.
 
-        Detectors land starting in phase 5 (static tier) and phase 6
-        (embedding-augmented tier).
+        Parameters
+        ----------
+        kinds :
+            Optional set of Finding kinds to keep (e.g. {"dead_code"}).
+            Other detectors won't be run. None means run everything.
+        cost_tiers :
+            Optional set of cost tiers (`"static"`, `"embedding"`,
+            `"llm_direct"`). Use this to cap runtime cost when you
+            don't have a budget to call the LLM-direct tier on every
+            scan. None means all tiers.
+
+        Returns
+        -------
+        list[Finding] — each carrying source_detector for provenance and
+        an optional Recommendation for what to do about it.
         """
-        raise NotImplementedError("Repo.findings() lands in phases 5–7.")
+        return _run_detectors(
+            self.name, self._backend, kinds=kinds, cost_tiers=cost_tiers
+        )
 
     def render(self, _section: str) -> str:
         """Generate a markdown view for the named renderer.

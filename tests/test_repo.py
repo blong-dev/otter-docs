@@ -50,10 +50,59 @@ def test_repo_accepts_custom_backend(tmp_path: Path):
     # closing the repo also closes the backend it owns
 
 
-def test_repo_scan_stub_raises(tmp_path: Path):
+def test_repo_scan_empty_repo(tmp_path: Path):
+    """scan() over an empty directory should return a ScanReport with zeros."""
     with Repo(tmp_path) as repo:
-        with pytest.raises(NotImplementedError, match="phase"):
-            repo.scan()
+        report = repo.scan()
+        assert report.files_seen == 0
+        assert report.files_parsed == 0
+        assert report.modules == 0
+
+
+def test_repo_scan_parses_python_file(tmp_path: Path):
+    (tmp_path / "hello.py").write_text(
+        '"""mod docs"""\n'
+        "import os\n\n"
+        "def greet(name):\n"
+        "    return 'hi ' + name\n"
+    )
+    with Repo(tmp_path) as repo:
+        report = repo.scan()
+        assert report.files_parsed == 1
+        assert report.modules == 1
+        assert report.functions == 1
+        # IMPORTS edge: hello.py → os
+        assert report.edges >= 1
+        mod = repo.graph.get_module(repo.name, "hello.py")
+        assert mod is not None
+        assert mod.docstring == "mod docs"
+        assert mod.imports == ["os"]
+
+
+def test_repo_scan_skips_excluded_dirs(tmp_path: Path):
+    """node_modules, .git, .venv, etc. should be pruned from the walk."""
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "junk.py").write_text("def x(): pass\n")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "site.py").write_text("def y(): pass\n")
+    (tmp_path / "real.py").write_text("def real(): pass\n")
+    with Repo(tmp_path) as repo:
+        report = repo.scan()
+        assert report.files_parsed == 1
+        # Only the real.py module should have been indexed.
+        modules = [m.path for m in repo.graph.list_modules(repo.name)]
+        assert modules == ["real.py"]
+
+
+def test_repo_scan_reset_clears_stale(tmp_path: Path):
+    (tmp_path / "a.py").write_text("def f(): pass\n")
+    with Repo(tmp_path) as repo:
+        repo.scan()
+        assert len(list(repo.graph.list_modules(repo.name))) == 1
+        # Delete the file, rescan with reset=True — the module should be gone.
+        (tmp_path / "a.py").unlink()
+        repo.scan(reset=True)
+        assert list(repo.graph.list_modules(repo.name)) == []
 
 
 def test_repo_findings_stub_raises(tmp_path: Path):

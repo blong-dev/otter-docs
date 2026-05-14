@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "otter-docs"
+version = "0.0.0"
+description = "Polyglot codebase inspection library for agent-driven development (namespace reserved; public release in progress)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Braedon Long", email = "braedon@dreamtree.org" },
+]
+keywords = [
+    "code-analysis",
+    "static-analysis",
+    "code-graph",
+    "redundancy-detection",
+    "agent",
+    "llm",
+    "polyglot",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/blong-dev/otter-docs"
+Repository = "https://github.com/blong-dev/otter-docs"
+Issues = "https://github.com/blong-dev/otter-docs/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/otter_docs"]

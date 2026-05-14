@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "otter-docs"
-version = "0.0.0"
-description = "Polyglot codebase inspection library for agent-driven development (namespace reserved; public release in progress)"
+version = "0.1.0.dev0"
+description = "Polyglot codebase inspection library for agent-driven development"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -22,7 +22,7 @@ keywords = [
     "polyglot",
 ]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -32,6 +32,21 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+    "pydantic>=2.6",
+    "sqlite-vec>=0.1.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "neo4j>=5.20",
+]
+neo4j = [
+    "neo4j>=5.20",
+]
 
 [project.urls]
 Homepage = "https://github.com/blong-dev/otter-docs"
@@ -40,3 +55,19 @@ Issues = "https://github.com/blong-dev/otter-docs/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/otter_docs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+pythonpath = ["src"]
+markers = [
+    "integration: tests that need external services (e.g. live Neo4j); skipped by default",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["E501"]  # line length handled by formatter

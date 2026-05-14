@@ -26,8 +26,10 @@ def _bootstrap() -> None:
     # Importing the modules triggers their `register()` calls. Same
     # pattern as parsers/__init__.py.
     from otter_docs.detectors import dead_code as _dc  # noqa: F401
-    from otter_docs.detectors import large_function as _lf  # noqa: F401
+    from otter_docs.detectors import description_divergence as _dd  # noqa: F401
     from otter_docs.detectors import empty_module as _em  # noqa: F401
+    from otter_docs.detectors import large_function as _lf  # noqa: F401
+    from otter_docs.detectors import semantic_equivalence as _se  # noqa: F401
 
 
 _bootstrap()

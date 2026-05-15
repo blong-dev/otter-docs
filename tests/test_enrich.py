@@ -127,6 +127,62 @@ def test_enrich_class_records_get_vectors(tmp_path: Path):
         assert classes[0].docstring_vec is not None  # has a docstring
 
 
+def test_enrich_truncates_oversized_code_for_embedder(tmp_path: Path):
+    """Whole-module sources past the embedder budget must be truncated.
+
+    Reproduces the real-model failure where nomic-embed-text returned
+    HTTP 500 on 40K-character module sources. The truncation is in
+    enrich._truncate_for_embed; this test asserts the embedder never
+    sees more than MAX_EMBED_CHARS + the marker string.
+    """
+    from otter_docs.enrich import MAX_EMBED_CHARS
+
+    # 30K lines × ~10 chars/line = ~300K characters — definitely over budget.
+    big_body = "    return 1\n" * 30000
+    (tmp_path / "huge.py").write_text(f"def f():\n{big_body}")
+
+    seen_text_lengths: list[int] = []
+    class _RecordingEmbedder:
+        @property
+        def dim(self) -> int:
+            return 8
+        def embed(self, texts):
+            for t in texts:
+                seen_text_lengths.append(len(t))
+            return [[1.0] + [0.0] * 7 for _ in texts]
+
+    backend = SqliteBackend(":memory:", vector_dim=8)
+    with Repo(tmp_path, backend=backend) as repo:
+        repo.scan()
+        report = repo.enrich(FakeLLMClient(), _RecordingEmbedder())
+        assert report.errors == []
+        # Every embed call received text within budget (plus the truncation
+        # marker — about 40 chars of overhead).
+        budget = MAX_EMBED_CHARS + 100
+        assert max(seen_text_lengths) <= budget, (
+            f"embedder saw text of length {max(seen_text_lengths)} > {budget}"
+        )
+
+
+def test_truncate_for_embed_preserves_short_text():
+    from otter_docs.enrich import _truncate_for_embed
+    short = "def f(): pass"
+    assert _truncate_for_embed(short) == short
+
+
+def test_truncate_for_embed_keeps_head_and_tail():
+    from otter_docs.enrich import MAX_EMBED_CHARS, _truncate_for_embed
+    head = "HEAD_MARKER_" * 1000  # at the front
+    tail = "_TAIL_MARKER_" * 1000  # at the back
+    middle = "X" * MAX_EMBED_CHARS  # so total length >> budget
+    text = head + middle + tail
+    result = _truncate_for_embed(text)
+    assert len(result) <= MAX_EMBED_CHARS + 100  # + truncation marker
+    assert "HEAD_MARKER_" in result
+    assert "_TAIL_MARKER_" in result
+    assert "truncated for embedding" in result
+
+
 def test_enrich_skips_vec_when_no_docstring(tmp_path: Path):
     (tmp_path / "a.py").write_text("def f(): return 1\n")
     backend = SqliteBackend(":memory:", vector_dim=8)

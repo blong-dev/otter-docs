@@ -42,6 +42,14 @@ from otter_docs.models import ClassRecord, FunctionRecord, Language, ModuleRecor
 # own line ranges already.
 MAX_MODULE_LINES_FOR_DESCRIBE = 200
 
+# Cap on how many characters we feed to the embedder per call.
+# nomic-embed-text v1.5 maxes at 8192 tokens; code averages ~3 chars/
+# token, so 12000 chars ≈ 4000 tokens — well under the limit with room
+# for the model's prefix overhead. Real-world: whole-module source for
+# big files (40K+ chars) returns HTTP 500 from the embedder. Truncating
+# preserves head + tail so imports and top-level body stay represented.
+MAX_EMBED_CHARS = 12000
+
 
 @dataclass
 class EnrichReport:
@@ -81,6 +89,20 @@ def _module_source_for_describe(source: bytes) -> bytes:
     head = lines[: MAX_MODULE_LINES_FOR_DESCRIBE // 2]
     tail = lines[-(MAX_MODULE_LINES_FOR_DESCRIBE // 2):]
     return b"".join(head) + b"\n# ... (truncated) ...\n" + b"".join(tail)
+
+
+def _truncate_for_embed(text: str, *, max_chars: int = MAX_EMBED_CHARS) -> str:
+    """Cap text at `max_chars`, keeping head + tail for context.
+
+    Embedders have hard token limits and return errors (HTTP 500 in
+    practice on nomic-embed-text) when exceeded. Head+tail preserves
+    the most diagnostic regions of a file: imports + early definitions
+    at the top, top-level invocations + main block at the bottom.
+    """
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return text[:half] + "\n... (truncated for embedding) ...\n" + text[-half:]
 
 
 def _language_tag(lang: Language) -> str:
@@ -268,13 +290,18 @@ class Enricher:
         report: EnrichReport,
     ) -> tuple[list[float], list[float], list[float] | None]:
         dim = self.embedder.dim
-        # Embed description + code unconditionally; docstring only when
-        # we have one. We batch all three (or two) into a single call so
-        # embedders that support batching pay only one round-trip.
-        texts = [description_text, code_text]
+        # All three texts are truncated to the embedder's safe budget.
+        # Code (especially whole-module source) is the one that
+        # actually trips the limit in practice; description + docstring
+        # are usually well under, but bounding all three keeps the
+        # implementation uniform and the failure mode predictable.
+        texts = [
+            _truncate_for_embed(description_text),
+            _truncate_for_embed(code_text),
+        ]
         has_doc = bool(docstring_text)
         if has_doc:
-            texts.append(docstring_text)
+            texts.append(_truncate_for_embed(docstring_text))
         vectors = self.embedder.embed(texts)
         report.embedding_calls += 1
         desc_vec = _norm_dim(vectors[0], dim)

@@ -22,11 +22,12 @@ from otter_docs.models import (
     ClassRecord,
     Edge,
     FunctionRecord,
-    Language as Lang,
     ModuleRecord,
 )
+from otter_docs.models import (
+    Language as Lang,
+)
 from otter_docs.parsers.base import ParseResult, register
-
 
 _LANGUAGE = Language(tree_sitter_go.language())
 _PARSER = Parser(_LANGUAGE)

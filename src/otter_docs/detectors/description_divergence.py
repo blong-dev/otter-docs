@@ -24,7 +24,6 @@ from otter_docs.detectors.base import register
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import Location
 
-
 DEFAULT_THRESHOLD = 0.4
 # When cosine similarity between description and code is below this,
 # we emit a Finding. Empirically (on nomic-embed-text) functions whose

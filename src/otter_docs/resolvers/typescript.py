@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import tree_sitter_typescript
-from tree_sitter import Language as TsLanguage, Node, Parser
+from tree_sitter import Language as TsLanguage
+from tree_sitter import Node, Parser
 
 from otter_docs.backends.base import GraphBackend
 from otter_docs.models import Edge, Language
@@ -155,7 +156,7 @@ class TypeScriptResolver:
             parser = _PARSER_TSX if module.path.endswith(".tsx") else _PARSER_TS
             try:
                 tree = parser.parse(text.encode("utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             for line, character in _iter_call_positions(tree.root_node):
                 caller_guid = _enclosing_function_guid(

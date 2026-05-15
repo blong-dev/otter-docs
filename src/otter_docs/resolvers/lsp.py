@@ -42,7 +42,7 @@ class LspError(RuntimeError):
     code: int | None = None
     data: Any = None
 
-    def __str__(self) -> str:  # noqa: D401 — match RuntimeError shape
+    def __str__(self) -> str:
         return self.message
 
 
@@ -269,7 +269,7 @@ class LspClient:
         try:
             for frame in _read_frames(proc.stdout):
                 self._dispatch(frame)
-        except Exception:  # noqa: BLE001 — reader thread must not crash silently
+        except Exception:
             pass
         finally:
             self._stopped.set()
@@ -286,7 +286,7 @@ class LspClient:
                 # forever if a server is chatty.
                 if len(self.stderr_tail) > 200:
                     self.stderr_tail.pop(0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _dispatch(self, frame: dict[str, Any]) -> None:

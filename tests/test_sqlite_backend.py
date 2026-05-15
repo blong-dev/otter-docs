@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -16,7 +16,6 @@ from otter_docs.models import (
     VectorKind,
 )
 from tests.conftest import unit
-
 
 # ── migration ───────────────────────────────────────────────────────────────
 
@@ -38,7 +37,8 @@ def test_migration_idempotent(vector_dim):
 
 
 def test_vector_dim_mismatch_raises(vector_dim):
-    import tempfile, os
+    import os
+    import tempfile
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         path = tmp.name
     try:
@@ -58,7 +58,7 @@ def test_module_round_trip(backend, vector_dim):
     m = ModuleRecord(
         repo="v3", path="pkg/a.py", language=Language.PYTHON,
         docstring="hello", imports=["os", "sys"], tags=["util"],
-        updated_at=datetime(2026, 5, 14, 12, 0, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC),
         description_vec=unit([1.0, 0.0], vector_dim),
     )
     backend.add_module(m)

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from otter_docs import Repo
 from otter_docs.backends import SqliteBackend
 from otter_docs.clients import FakeEmbeddingClient, FakeLLMClient

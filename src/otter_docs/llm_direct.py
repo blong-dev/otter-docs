@@ -24,7 +24,6 @@ from otter_docs.clients.base import LLMClient
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import FunctionRecord
 
-
 # ── public schemas ──────────────────────────────────────────────────────
 
 

@@ -14,14 +14,18 @@ from pathlib import Path
 from otter_docs.backends import GraphBackend, SqliteBackend
 from otter_docs.clients.base import EmbeddingClient, LLMClient
 from otter_docs.describe import DescriptionCache, SqliteDescriptionCache
-from otter_docs.discovery import is_tsx, iter_source_files
 from otter_docs.detectors import run_all as _run_detectors
 from otter_docs.detectors.base import CostTier
-from otter_docs.enrich import EnrichReport, Enricher
+from otter_docs.discovery import is_tsx, iter_source_files
+from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.llm_direct import (
     Review,
+)
+from otter_docs.llm_direct import (
     propose_consolidation as _propose_consolidation,
+)
+from otter_docs.llm_direct import (
     review_change as _review_change,
 )
 from otter_docs.models import Edge, Language
@@ -166,7 +170,7 @@ class Repo:
                     if result is None:
                         report.files_skipped.append(abs_path)
                         continue
-            except Exception as e:  # noqa: BLE001 — parser bugs shouldn't fail the scan
+            except Exception as e:
                 report.errors.append((abs_path, f"parse failed: {type(e).__name__}: {e}"))
                 continue
 

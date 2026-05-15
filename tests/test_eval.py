@@ -12,7 +12,6 @@ from otter_docs.clients import FakeEmbeddingClient
 from otter_docs.eval import ClonePair, Metrics, evaluate, sweep_threshold
 from otter_docs.eval_data import load_bundled, load_jsonl
 
-
 # ── metrics math ────────────────────────────────────────────────────────
 
 
@@ -147,8 +146,9 @@ def test_load_jsonl_roundtrip(tmp_path):
 
 
 def test_gptclonebench_missing_manifest_raises(tmp_path):
-    from otter_docs.eval_data import load_gptclonebench
     import pytest
+
+    from otter_docs.eval_data import load_gptclonebench
 
     with pytest.raises(FileNotFoundError, match="manifest"):
         list(load_gptclonebench(tmp_path))

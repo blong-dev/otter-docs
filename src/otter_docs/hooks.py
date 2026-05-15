@@ -17,7 +17,6 @@ from __future__ import annotations
 import stat
 from pathlib import Path
 
-
 _PRE_COMMIT = """\
 #!/bin/sh
 # otter-docs pre-commit — regenerate docs, stage ONLY the doc file.

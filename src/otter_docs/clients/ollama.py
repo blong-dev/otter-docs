@@ -16,7 +16,6 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_LLM_MODEL = "qwen3.5:9b"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"

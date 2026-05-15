@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import tree_sitter_go
-from tree_sitter import Language as TsLanguage, Node, Parser
+from tree_sitter import Language as TsLanguage
+from tree_sitter import Node, Parser
 
 from otter_docs.backends.base import GraphBackend
 from otter_docs.models import Edge, Language
@@ -130,7 +131,7 @@ class GoResolver:
             abs_uri = f"file://{(repo_root / module.path).resolve()}"
             try:
                 tree = _GO_PARSER.parse(text.encode("utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             for line, character in _iter_call_positions(tree.root_node):
                 caller_guid = _enclosing_function_guid(

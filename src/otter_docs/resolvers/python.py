@@ -83,7 +83,7 @@ class JediResolver:
                 names = script.get_names(
                     all_scopes=True, definitions=False, references=True
                 )
-            except Exception:  # noqa: BLE001 — jedi can be flaky on bad source
+            except Exception:
                 continue
             yield from self._edges_from_names(
                 names, module_path=module.path, line_index=line_index,
@@ -125,7 +125,7 @@ class JediResolver:
 
             try:
                 defs = name.goto(follow_imports=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             for d in defs:
                 if d.type not in ("function", "class"):

@@ -17,7 +17,6 @@ from pathlib import Path
 
 from otter_docs.models import Language
 
-
 # Directories never worth walking. Keep this list short and obvious;
 # anything project-specific belongs in the user's .otter-docs config
 # (a later phase). This is the floor, not the policy.

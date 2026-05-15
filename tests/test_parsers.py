@@ -12,7 +12,6 @@ from otter_docs.models import Language
 from otter_docs.parsers import parse_file
 from otter_docs.parsers.typescript import TSX_PARSER
 
-
 # ── Python ──────────────────────────────────────────────────────────────
 
 

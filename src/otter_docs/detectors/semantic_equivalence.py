@@ -25,7 +25,6 @@ from otter_docs.detectors.base import register
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import Location, VectorKind
 
-
 DEFAULT_DESCRIPTION_THRESHOLD = 0.92
 DEFAULT_CODE_THRESHOLD = 0.85
 # How many neighbors to ask the index for, per function. Larger k finds

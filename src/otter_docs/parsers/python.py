@@ -20,11 +20,12 @@ from otter_docs.models import (
     ClassRecord,
     Edge,
     FunctionRecord,
-    Language as Lang,
     ModuleRecord,
 )
-from otter_docs.parsers.base import LanguageParser, ParseResult, register
-
+from otter_docs.models import (
+    Language as Lang,
+)
+from otter_docs.parsers.base import ParseResult, register
 
 _LANGUAGE = Language(tree_sitter_python.language())
 _PARSER = Parser(_LANGUAGE)
@@ -95,7 +96,7 @@ class _Walker:
         # async def is its own grammar node in tree-sitter-python.
         if not is_async and node.parent and node.parent.type == "decorated_definition":
             pass  # decorators don't affect async-ness
-        is_async = is_async or node.type == "function_definition" and node.children and node.children[0].type == "async"
+        is_async = is_async or (node.type == "function_definition" and node.children and node.children[0].type == "async")
         args = self._args(node)
         record = FunctionRecord(
             repo=self.repo,

@@ -8,14 +8,12 @@ response correlation by id, and basic error handling.
 
 from __future__ import annotations
 
-import json
 import sys
 import textwrap
 
 import pytest
 
 from otter_docs.resolvers.lsp import LspClient, LspError
-
 
 _MOCK_SERVER_SCRIPT = textwrap.dedent("""\
 import json, sys

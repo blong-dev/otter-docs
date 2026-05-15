@@ -26,7 +26,6 @@ from otter_docs.clients.base import EmbeddingClient, LLMClient
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.repo import Repo
 
-
 # Which finding kinds roll up into which health dimension. A kind not
 # listed here still counts toward the overall via the catch-all
 # "other" dimension so nothing silently disappears.

@@ -13,7 +13,6 @@ from otter_docs.clients import (
     OllamaLLMClient,
 )
 
-
 # ── fakes ──────────────────────────────────────────────────────────────
 
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 from otter_docs.clients import FakeLLMClient
 from otter_docs.describe import (
     Describer,

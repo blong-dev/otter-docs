@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from otter_docs.cli import main
 from otter_docs.hooks import install_hooks
 

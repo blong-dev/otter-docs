@@ -19,7 +19,6 @@ from otter_docs.backends import SqliteBackend
 from otter_docs.models import Language
 from otter_docs.resolvers import registry
 
-
 pytestmark = pytest.mark.integration
 
 

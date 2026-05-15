@@ -10,8 +10,6 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-import pytest
-
 from otter_docs import Repo
 from otter_docs.backends import SqliteBackend
 from otter_docs.clients import FakeLLMClient
@@ -90,19 +88,11 @@ def test_semantic_equivalence_pairs_similar_functions(tmp_path: Path):
     # can map exactly those strings to our chosen vectors.
     with Repo(tmp_path, backend=backend) as repo:
         repo.scan()
-        # First enrich pass uses an embedder that returns near-identical
-        # vectors for alpha & beta and a different one for gamma.
         # We can't know the exact LLM-generated description text until
-        # the describer runs, so use a non-deterministic mapping by
-        # falling back to "anything not in the map -> pair_vec". To
-        # isolate gamma, map its function source explicitly.
-        mapping: dict[str, list[float]] = {}
-        # Build the mapping by sniffing which prompts FakeLLM would
-        # produce when called — easier: just set odd_vec for any text
-        # containing "gamma" or "1000", and pair_vec for everything
-        # else.
-        # We bypass this by making a controlled embedder that decides
-        # at embed time based on whether the text contains 'gamma'.
+        # the describer runs, so decide the vector at embed time by
+        # content: odd_vec for anything mentioning "gamma"/"1000",
+        # pair_vec otherwise — making alpha & beta collide and gamma
+        # stand apart.
         class _RuleEmbedder:
             @property
             def dim(self) -> int:

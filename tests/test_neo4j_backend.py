@@ -27,7 +27,6 @@ from otter_docs.models import (
 )
 from tests.conftest import unit
 
-
 TEST_REPO = "otter-test-neo4j"
 
 

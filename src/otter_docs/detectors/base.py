@@ -7,7 +7,6 @@ from typing import Literal, Protocol
 from otter_docs.backends.base import GraphBackend
 from otter_docs.findings import Finding
 
-
 CostTier = Literal["static", "embedding", "llm_direct"]
 
 

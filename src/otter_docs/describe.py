@@ -24,7 +24,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-
 DEFAULT_PROMPT_TEMPLATE = """\
 Given this {kind}, produce a structured description.
 
@@ -70,7 +69,7 @@ def content_hash(source: bytes) -> str:
     input. SHA-1 keeps cache keys short and aligns with the way
     every other tool in this ecosystem identifies content.
     """
-    return hashlib.sha1(source).hexdigest()  # noqa: S324 — see docstring
+    return hashlib.sha1(source).hexdigest()
 
 
 class DescriptionCache(Protocol):

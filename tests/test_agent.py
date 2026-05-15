@@ -202,7 +202,8 @@ def test_harness_proposes_consolidations_with_llm(tmp_path: Path):
     repo.enrich(llm, emb)
 
     class _DiffLLM:
-        calls: list[str] = []
+        def __init__(self):
+            self.calls: list[str] = []
         def complete(self, prompt, **kw):
             self.calls.append(prompt)
             if "Two functions in the same codebase" in prompt:

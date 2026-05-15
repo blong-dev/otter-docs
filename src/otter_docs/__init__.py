@@ -1,5 +1,6 @@
 """otter-docs — polyglot codebase inspection library for agent-driven development."""
 
+from otter_docs.agent import Grade, GradeReport, Harness
 from otter_docs.backends import GraphBackend, SqliteBackend
 from otter_docs.clients import (
     EmbeddingClient,
@@ -10,9 +11,8 @@ from otter_docs.clients import (
     OllamaLLMClient,
 )
 from otter_docs.describe import Describer, Description, SqliteDescriptionCache
-from otter_docs.enrich import EnrichReport, Enricher
+from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
-from otter_docs.agent import Grade, GradeReport, Harness
 from otter_docs.llm_direct import Review
 from otter_docs.models import (
     ClassRecord,
@@ -34,13 +34,12 @@ __all__ = [
     "Describer",
     "Description",
     "Edge",
+    "EmbeddingClient",
     "EnrichReport",
     "Enricher",
-    "Finding",
-    "Recommendation",
-    "EmbeddingClient",
     "FakeEmbeddingClient",
     "FakeLLMClient",
+    "Finding",
     "FunctionRecord",
     "Grade",
     "GradeReport",
@@ -52,6 +51,7 @@ __all__ = [
     "ModuleRecord",
     "OllamaEmbeddingClient",
     "OllamaLLMClient",
+    "Recommendation",
     "Repo",
     "ResolveReport",
     "Review",

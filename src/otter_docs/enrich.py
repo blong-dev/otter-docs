@@ -35,7 +35,6 @@ from otter_docs.clients.base import EmbeddingClient, LLMClient
 from otter_docs.describe import Describer, DescriptionCache
 from otter_docs.models import ClassRecord, FunctionRecord, Language, ModuleRecord
 
-
 # Cap on how much of a module file we feed to the describer for module-
 # level descriptions. Past ~200 lines the description gets noisy and
 # the model latency dominates. Functions/classes are scoped to their
@@ -167,7 +166,7 @@ class Enricher:
                 continue
             try:
                 self._enrich_module(module, source, report)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.errors.append(
                     (module.path, f"module enrich failed: {type(e).__name__}: {e}")
                 )
@@ -181,7 +180,7 @@ class Enricher:
                 continue
             try:
                 self._enrich_function(fn, source, report)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.errors.append(
                     (fn.guid, f"function enrich failed: {type(e).__name__}: {e}")
                 )
@@ -195,7 +194,7 @@ class Enricher:
                 continue
             try:
                 self._enrich_class(cls, source, report)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.errors.append(
                     (cls.guid, f"class enrich failed: {type(e).__name__}: {e}")
                 )

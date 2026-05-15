@@ -33,7 +33,7 @@ import json
 import sqlite3
 import struct
 from collections.abc import Iterable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -358,7 +358,7 @@ class SqliteBackend:
         )
 
     def _add_edge_with_repo(self, edge: Edge, repo: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         self.conn.execute(
             """
             INSERT INTO code_edges (repo, kind, src_id, dst_id, updated_at)

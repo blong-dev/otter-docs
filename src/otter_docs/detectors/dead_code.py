@@ -23,7 +23,6 @@ from otter_docs.detectors.base import register
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import Location
 
-
 # Names we never flag — they're called by external systems (test
 # runners, CLIs, frameworks) rather than in-repo code. The dunder
 # list covers the common entry points the runtime/GC/protocol-machinery

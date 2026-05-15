@@ -31,9 +31,9 @@ def serve(repo_root: Path) -> None:
     """
     try:
         import anyio
+        import mcp.types as types
         from mcp.server import Server
         from mcp.server.stdio import stdio_server
-        import mcp.types as types
     except ImportError as e:  # pragma: no cover - exercised via CLI message
         raise ImportError(
             "The MCP server needs the optional `mcp` package.\n"
@@ -65,7 +65,7 @@ def serve(repo_root: Path) -> None:
             return [types.TextContent(type="text", text=f"unknown tool: {name}")]
         try:
             result = tool.call(**(arguments or {}))
-        except Exception as e:  # noqa: BLE001 — surface tool errors to the host
+        except Exception as e:
             return [types.TextContent(type="text", text=f"error: {type(e).__name__}: {e}")]
         import json
         return [types.TextContent(type="text", text=json.dumps(result, default=str))]

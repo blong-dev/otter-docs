@@ -16,7 +16,6 @@ from otter_docs.detectors.base import register
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import Location
 
-
 DEFAULT_THRESHOLD = 80
 
 

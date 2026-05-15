@@ -38,7 +38,8 @@ def test_go_resolver_registered_only_when_binary_present():
 
 def test_iter_call_positions_finds_plain_call():
     import tree_sitter_go
-    from tree_sitter import Language as TsLanguage, Parser
+    from tree_sitter import Language as TsLanguage
+    from tree_sitter import Parser
 
     parser = Parser(TsLanguage(tree_sitter_go.language()))
     src = b"package x\n\nfunc main() {\n    helper()\n    pkg.Foo()\n}\n"

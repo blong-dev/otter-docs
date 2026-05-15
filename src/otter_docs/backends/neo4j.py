@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from otter_docs.models import (
@@ -301,7 +301,7 @@ class Neo4jBackend:
                 SET r.updated_at = $now
                 """.replace("__KIND__", edge.kind),
                 repo=repo, src=edge.src_id, dst=edge.dst_id,
-                now=datetime.now(timezone.utc).isoformat(),
+                now=datetime.now(UTC).isoformat(),
             )
 
     def _check_vec_dims(

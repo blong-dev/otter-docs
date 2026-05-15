@@ -24,11 +24,12 @@ from otter_docs.models import (
     ClassRecord,
     Edge,
     FunctionRecord,
-    Language as Lang,
     ModuleRecord,
 )
+from otter_docs.models import (
+    Language as Lang,
+)
 from otter_docs.parsers.base import ParseResult, register
-
 
 _LANGUAGE_TS = Language(tree_sitter_typescript.language_typescript())
 _LANGUAGE_TSX = Language(tree_sitter_typescript.language_tsx())

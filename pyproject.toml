@@ -89,4 +89,18 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
-ignore = ["E501"]  # line length handled by formatter
+ignore = [
+    "E501",   # line length handled by formatter
+    # `class X(str, Enum)` is intentional, not `StrEnum`: pydantic
+    # serialization + the round-trip tests depend on .value semantics;
+    # StrEnum changes str() behavior. Style rule, not a bug.
+    "UP042",
+    # Em-dashes / arrows (— → ×) in docstrings and comments are
+    # deliberate for readability. Not homoglyph-confusable in prose.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files legitimately import after pytest.importorskip(...) so a
+# missing optional dep skips cleanly instead of erroring at collection.
+"tests/*" = ["E402"]

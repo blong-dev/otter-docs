@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pydantic
 import pytest
 
 from otter_docs.models import (
@@ -20,7 +21,8 @@ from otter_docs.models import (
 
 def test_location_is_frozen():
     loc = Location(repo="r", path="p")
-    with pytest.raises(Exception):
+    # pydantic v2 raises ValidationError on a frozen-model mutation.
+    with pytest.raises(pydantic.ValidationError):
         loc.path = "other"  # type: ignore[misc]
 
 

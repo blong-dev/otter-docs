@@ -410,9 +410,59 @@ class Repo:
             kind=kind, guid=guid, language=language, source=body,
         )
 
-    def render(self, _section: str) -> str:
-        """Generate a markdown view for the named renderer.
+    def render(self, section: str) -> str:
+        """Render one named section to a markdown fragment.
 
-        Renderers land in phase 9.
+        Sections: system_overview, findings_summary, redundancy_report,
+        dependency_graph, architecture_smells. Raises KeyError on an
+        unknown name so a typo fails loudly.
         """
-        raise NotImplementedError("Repo.render() lands in phase 9.")
+        from otter_docs.render import render_section
+        return render_section(section, self)
+
+    def render_document(
+        self,
+        path: str | Path,
+        *,
+        title: str | None = None,
+        sections: list[str] | None = None,
+    ) -> str:
+        """Write/update a generated document at `path`, return its text.
+
+        If the file doesn't exist it's bootstrapped with marker pairs
+        for every requested section (default: all registered
+        renderers, in a stable order). On rerun, only the content
+        between each section's BEGIN/END markers is replaced — human
+        prose elsewhere is preserved byte-for-byte.
+        """
+        from otter_docs.render import (
+            bootstrap_document,
+            inject,
+            registry,
+        )
+
+        target = Path(path)
+        if sections is None:
+            # Stable, readable order — overview first, smells last.
+            order = [
+                "system_overview",
+                "findings_summary",
+                "redundancy_report",
+                "dependency_graph",
+                "architecture_smells",
+            ]
+            known = set(registry())
+            sections = [s for s in order if s in known]
+
+        if target.exists():
+            document = target.read_text(encoding="utf-8")
+        else:
+            document = bootstrap_document(
+                title=title or self.name, sections=sections
+            )
+
+        for name in sections:
+            document = inject(document, name=name, body=self.render(name))
+
+        target.write_text(document, encoding="utf-8")
+        return document

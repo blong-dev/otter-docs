@@ -110,7 +110,16 @@ def test_repo_findings_empty_returns_empty_list(tmp_path: Path):
         assert repo.findings() == []
 
 
-def test_repo_render_stub_raises(tmp_path: Path):
+def test_repo_render_returns_markdown(tmp_path: Path):
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
     with Repo(tmp_path) as repo:
-        with pytest.raises(NotImplementedError, match="phase"):
-            repo.render("system_overview")
+        repo.scan()
+        out = repo.render("system_overview")
+        assert isinstance(out, str)
+        assert repo.name in out
+
+
+def test_repo_render_unknown_section_raises(tmp_path: Path):
+    with Repo(tmp_path) as repo:
+        with pytest.raises(KeyError):
+            repo.render("not_a_renderer")

@@ -12,6 +12,7 @@ from otter_docs.clients import (
 from otter_docs.describe import Describer, Description, SqliteDescriptionCache
 from otter_docs.enrich import EnrichReport, Enricher
 from otter_docs.findings import Finding, Recommendation
+from otter_docs.llm_direct import Review
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -49,6 +50,7 @@ __all__ = [
     "OllamaLLMClient",
     "Repo",
     "ResolveReport",
+    "Review",
     "ScanReport",
     "SimilarityHit",
     "SqliteBackend",

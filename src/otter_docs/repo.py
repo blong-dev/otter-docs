@@ -18,7 +18,12 @@ from otter_docs.discovery import is_tsx, iter_source_files
 from otter_docs.detectors import run_all as _run_detectors
 from otter_docs.detectors.base import CostTier
 from otter_docs.enrich import EnrichReport, Enricher
-from otter_docs.findings import Finding
+from otter_docs.findings import Finding, Recommendation
+from otter_docs.llm_direct import (
+    Review,
+    propose_consolidation as _propose_consolidation,
+    review_change as _review_change,
+)
 from otter_docs.models import Edge, Language
 from otter_docs.parsers import parse_file
 from otter_docs.parsers.typescript import TSX_PARSER
@@ -304,6 +309,105 @@ class Repo:
         """
         return _run_detectors(
             self.name, self._backend, kinds=kinds, cost_tiers=cost_tiers
+        )
+
+    # ── LLM-direct tier (Phase 7) ────────────────────────────────────
+
+    def propose_consolidation(
+        self,
+        finding: Finding,
+        llm: LLMClient,
+    ) -> Recommendation:
+        """Ask the LLM to produce a unified diff consolidating a redundancy.
+
+        Input must be a `redundancy.*` Finding with at least two
+        function locations (the embedding-tier detector emits these).
+        Returns a Recommendation whose `proposed_diff` is the
+        generated diff, or None if the LLM declined.
+
+        The library does NOT apply the diff — the harness owns
+        implementation.
+        """
+        return _propose_consolidation(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            llm=llm,
+        )
+
+    def review_change(
+        self,
+        diff: str,
+        llm: LLMClient,
+        *,
+        related_findings: list[Finding] | None = None,
+    ) -> Review:
+        """Ask the LLM to review a unified diff.
+
+        Returns a `Review` carrying summary, overall verdict
+        (approve / request_changes / comment), addresses_findings,
+        new_risks, blockers. Used by the agent after writing a patch
+        — call before applying.
+        """
+        return _review_change(
+            diff=diff, related_findings=related_findings, llm=llm,
+        )
+
+    def describe(
+        self,
+        llm: LLMClient,
+        *,
+        guid: str | None = None,
+        path: str | None = None,
+    ):
+        """Describe a single symbol on demand.
+
+        Looks up the symbol by `guid` (function/class) or `path`
+        (module), reads its source from disk, and runs the describer
+        (with caching). Cheaper than running enrich() when you only
+        want one symbol's prose.
+
+        Returns the `Description` object or None if the symbol isn't
+        found.
+        """
+        from otter_docs.describe import Describer
+        from otter_docs.enrich import _slice_source
+        if guid is None and path is None:
+            raise ValueError("describe() needs guid= or path=")
+        if guid is not None and path is not None:
+            raise ValueError("describe() takes guid= OR path=, not both")
+
+        describer = Describer(llm, self._default_description_cache())
+        if path is not None:
+            module = self._backend.get_module(self.name, path)
+            if module is None:
+                return None
+            try:
+                source = (self.root / path).read_bytes()
+            except OSError:
+                return None
+            return describer.describe(
+                kind="module", guid=path,
+                language=module.language.value, source=source,
+            )
+
+        # guid path: look up function first, then class.
+        fn = self._backend.get_function(self.name, guid)
+        cls = None if fn else self._backend.get_class(self.name, guid)
+        symbol = fn or cls
+        if symbol is None:
+            return None
+        try:
+            source = (self.root / symbol.module_path).read_bytes()
+        except OSError:
+            return None
+        body = _slice_source(source, symbol.line, symbol.end_line)
+        module = self._backend.get_module(self.name, symbol.module_path)
+        language = module.language.value if module is not None else "text"
+        kind = "function" if fn is not None else "class"
+        return describer.describe(
+            kind=kind, guid=guid, language=language, source=body,
         )
 
     def render(self, _section: str) -> str:

@@ -21,9 +21,13 @@ __all__ = ["Resolver", "register", "registry", "resolve_repo"]
 
 
 def _bootstrap() -> None:
-    # Lazy: only the Python resolver auto-registers in v0.1. Go and TS
-    # resolvers will register here once their LSP clients are written.
+    # Each resolver module auto-registers if its dependencies are
+    # available (jedi importable, typescript-language-server on PATH,
+    # gopls on PATH). Missing tooling = silent skip; users opt in by
+    # installing the tool.
+    from otter_docs.resolvers import go as _go  # noqa: F401
     from otter_docs.resolvers import python as _py  # noqa: F401
+    from otter_docs.resolvers import typescript as _ts  # noqa: F401
 
 
 _bootstrap()

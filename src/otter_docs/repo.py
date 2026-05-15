@@ -224,6 +224,7 @@ class Repo:
         embedder: EmbeddingClient,
         *,
         description_cache: DescriptionCache | None = None,
+        max_embed_chars: int | None = None,
     ) -> EnrichReport:
         """Three-vector enrichment over every symbol the graph knows about.
 
@@ -253,9 +254,10 @@ class Repo:
             for persistent caching across runs.
         """
         cache = description_cache or self._default_description_cache()
-        enricher = Enricher(
-            self._backend, llm, embedder, description_cache=cache
-        )
+        kwargs: dict = {"description_cache": cache}
+        if max_embed_chars is not None:
+            kwargs["max_embed_chars"] = max_embed_chars
+        enricher = Enricher(self._backend, llm, embedder, **kwargs)
         return enricher.enrich_repo(self.name, self.root)
 
     def _default_description_cache(self) -> DescriptionCache:

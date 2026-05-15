@@ -43,12 +43,17 @@ from otter_docs.models import ClassRecord, FunctionRecord, Language, ModuleRecor
 MAX_MODULE_LINES_FOR_DESCRIBE = 200
 
 # Cap on how many characters we feed to the embedder per call.
+#
 # nomic-embed-text v1.5 maxes at 8192 tokens; code averages ~3 chars/
-# token, so 12000 chars ≈ 4000 tokens — well under the limit with room
-# for the model's prefix overhead. Real-world: whole-module source for
-# big files (40K+ chars) returns HTTP 500 from the embedder. Truncating
-# preserves head + tail so imports and top-level body stay represented.
-MAX_EMBED_CHARS = 12000
+# token, so 20000 chars ≈ 6700 tokens stays comfortably under the
+# model's hard limit with room for the model's own prefix overhead.
+#
+# Truncation matters because some embedders (and especially llama.cpp
+# servers with default `--ubatch-size 512`) hard-fail beyond their
+# batch size — operators running undersized batches should pass a
+# smaller `max_embed_chars` to Repo.enrich() rather than expecting
+# the library to second-guess their server config.
+MAX_EMBED_CHARS = 20000
 
 
 @dataclass
@@ -132,11 +137,13 @@ class Enricher:
         embedder: EmbeddingClient,
         *,
         description_cache: DescriptionCache | None = None,
+        max_embed_chars: int = MAX_EMBED_CHARS,
     ) -> None:
         self.backend = backend
         self.llm = llm
         self.embedder = embedder
         self.describer = Describer(llm, description_cache)
+        self.max_embed_chars = max_embed_chars
 
     # ── high-level entry point ─────────────────────────────────────
 
@@ -295,13 +302,14 @@ class Enricher:
         # actually trips the limit in practice; description + docstring
         # are usually well under, but bounding all three keeps the
         # implementation uniform and the failure mode predictable.
+        cap = self.max_embed_chars
         texts = [
-            _truncate_for_embed(description_text),
-            _truncate_for_embed(code_text),
+            _truncate_for_embed(description_text, max_chars=cap),
+            _truncate_for_embed(code_text, max_chars=cap),
         ]
         has_doc = bool(docstring_text)
         if has_doc:
-            texts.append(_truncate_for_embed(docstring_text))
+            texts.append(_truncate_for_embed(docstring_text, max_chars=cap))
         vectors = self.embedder.embed(texts)
         report.embedding_calls += 1
         desc_vec = _norm_dim(vectors[0], dim)

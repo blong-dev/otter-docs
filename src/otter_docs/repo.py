@@ -22,6 +22,8 @@ from otter_docs.findings import Finding
 from otter_docs.models import Edge, Language
 from otter_docs.parsers import parse_file
 from otter_docs.parsers.typescript import TSX_PARSER
+from otter_docs.resolvers import resolve_repo as _resolve_repo
+from otter_docs.resolvers.base import ResolveReport
 
 
 @dataclass
@@ -188,6 +190,33 @@ class Repo:
         edge writes during exploration.
         """
         self._backend._add_edge_with_repo(edge, repo=self.name)
+
+    def resolve(
+        self,
+        *,
+        languages: set[Language] | None = None,
+    ) -> dict[Language, ResolveReport]:
+        """Run cross-file resolvers and write CALLS edges.
+
+        scan() emits intra-file CALLS only — a function calling a
+        helper from another file looks dead. This step asks each
+        language's mature name-resolver (jedi for Python; gopls / tsserver
+        in later versions) to fill in those cross-file edges.
+
+        Idempotent — backend edge inserts are upserts, so a second
+        resolve() over an unchanged repo doesn't change the graph.
+
+        Parameters
+        ----------
+        languages :
+            Optional filter. Default runs every registered resolver.
+        """
+        return _resolve_repo(
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            languages=languages,
+        )
 
     def enrich(
         self,

@@ -23,6 +23,7 @@ from otter_docs.models import (
     VectorKind,
 )
 from otter_docs.repo import Repo, ScanReport
+from otter_docs.resolvers.base import ResolveReport
 
 __version__ = "0.1.0.dev0"
 
@@ -47,6 +48,7 @@ __all__ = [
     "OllamaEmbeddingClient",
     "OllamaLLMClient",
     "Repo",
+    "ResolveReport",
     "ScanReport",
     "SimilarityHit",
     "SqliteBackend",

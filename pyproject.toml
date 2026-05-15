@@ -47,9 +47,18 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.4",
     "neo4j>=5.20",
+    "jedi>=0.19",
 ]
 neo4j = [
     "neo4j>=5.20",
+]
+python-resolver = [
+    "jedi>=0.19",
+]
+# Convenience extra that pulls every optional resolver. Go and TS
+# resolvers will land here as they're added.
+all-resolvers = [
+    "jedi>=0.19",
 ]
 
 [project.urls]

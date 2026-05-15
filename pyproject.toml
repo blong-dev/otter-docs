@@ -60,6 +60,12 @@ python-resolver = [
 all-resolvers = [
     "jedi>=0.19",
 ]
+mcp = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+otter-docs = "otter_docs.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/blong-dev/otter-docs"

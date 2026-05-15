@@ -95,22 +95,49 @@ validates the *mechanism* — description-vector cosine cleanly
 separates semantic clones from look-alikes.
 
 **What this is NOT:** 12 hand-picked pairs with idealized
-(hand-written, identical-for-clones) descriptions is not comparable
-to C4's ~0.7 F1 on the 37K-pair GPTCloneBench. The bundled number
-proves the approach works in principle; it does not establish
-production-scale precision. The full GPTCloneBench run — with
-*LLM-generated* descriptions (which introduce real variance) over the
-real dataset — is a documented local procedure
-(`otter_docs.eval_data.load_gptclonebench`), not a CI step: CI has
-neither the dataset nor a real embedder. CI runs the eval harness
-against the bundled set with a deterministic fake embedder to guard
-the precision/recall/threshold math against regressions.
+(hand-written, identical-for-clones) descriptions does not establish
+production-scale precision. The bundled number proves the mechanism;
+it is not a benchmark figure.
 
-We publish whatever the full local run produces, honestly, here —
-when it's run. It has not been run yet.
+**Scale benchmark — IBM Project CodeNet (Python800).** We chose
+CodeNet over GPTCloneBench deliberately: GPTCloneBench's data is
+CC BY-NC-ND (a NonCommercial + NoDerivatives gray area for a
+commercial product), and it's mostly Java/C/C# — only its Python
+slice overlaps our parsers. CodeNet is **CDLA-Permissive-2.0**
+(commercial use + derivatives explicitly OK), Python-native, and
+type-4 by construction: every accepted submission to a problem is a
+semantically-equivalent solution; different problems are non-clones.
 
-GPTCloneBench reference (and why BigCloneBench is corrupted):
-<https://arxiv.org/html/2505.04311v1>.
+The sampler is the part that has to be honest, not hand-wavy. A
+naive same-problem→clone sampler is meaningless because same-problem
+submissions are full of copy-paste. `otter_docs.eval_codenet`
+enforces:
+- **type-4 positives only** — a same-problem pair is kept only if
+  token-set Jaccard is below a threshold AND its AST node-type
+  histogram is structurally divergent. Copy-paste / renamed-var
+  pairs are excluded. An unfiltered same-problem set is scored in
+  parallel so the report shows the *contamination delta* (easy vs
+  hard number) explicitly.
+- **two negative strata** — `hard` (different-problem pairs that are
+  surface-similar, the case surface-trained models fail) and
+  `random`, reported separately.
+- **no description leakage** — each snippet is described by the
+  shipping describer from its *code only*, never the problem id.
+- frozen seed + config, printed with the number → reproducible by
+  construction.
+
+Reproduce it yourself: `examples/codenet_eval.py` (download
+instructions in the file header). Not a CI step — CI has no dataset,
+LLM, or embedder; CI runs the harness on the bundled set with a
+fake embedder to guard the precision/recall/threshold math.
+
+**Status: the CodeNet run is in progress; the headline + baseline
+numbers and sampler config will be published here, honestly,
+when it completes.** It has not finished yet.
+
+CodeNet: <https://github.com/IBM/Project_CodeNet> ·
+CDLA-Permissive-2.0: <https://cdla.dev/permissive-2-0/> ·
+Why BigCloneBench is corrupted: <https://arxiv.org/html/2505.04311v1>.
 
 ## Known limitations
 

@@ -60,3 +60,19 @@ jobs:
 
       - name: Run pytest (unit tests only)
         run: python -m pytest -v
+
+      - name: Clone-eval harness regression (fake embedder, bundled set)
+        # Guards the precision/recall/threshold math. NOT a model-
+        # quality measurement — CI has no real embedder. Real
+        # GPTCloneBench numbers are a documented local procedure.
+        run: |
+          python -c "
+          from otter_docs.eval import evaluate
+          from otter_docs.eval_data import load_bundled
+          from otter_docs.clients import FakeEmbeddingClient
+          pairs = load_bundled()
+          m = evaluate(pairs, FakeEmbeddingClient(dim=32), threshold=0.8)
+          total = m.true_positive + m.false_positive + m.true_negative + m.false_negative
+          assert total == len(pairs), (total, len(pairs))
+          print(f'eval harness OK: {len(pairs)} pairs scored, F1={m.f1:.3f} (fake embedder)')
+          "

@@ -57,7 +57,8 @@ otter-docs serve .           # MCP server (needs the [mcp] extra)
 - **Polyglot AST** via tree-sitter — Python, Go, TypeScript/TSX, JS.
 - **Cross-file resolution** via mature per-language solvers: jedi
   (Python, validated), `typescript-language-server` (TS, validated),
-  `gopls` (Go, code-complete, awaiting a live-gopls validation).
+  `gopls` (Go, validated against gopls v0.21.1 — resolves
+  cross-file calls and receiver methods).
   Each registers only when its tooling is present; a polyglot repo
   with partial tooling still gets partial coverage.
 - **Three-vector indexing** per symbol: an LLM-generated description,
@@ -118,8 +119,8 @@ GPTCloneBench reference (and why BigCloneBench is corrupted):
   reached via dynamic dispatch (`self.x.method()`) still escape it.
   Findings carry `confidence` and `edge_confidence` for exactly this
   reason — weight by them.
-- The Go resolver is code-complete but unvalidated against a live
-  `gopls` (no Go toolchain on the build machine yet).
+- All three resolvers are validated against their live language
+  servers (jedi, typescript-language-server, gopls v0.21.1).
 - `risk.behavior_propagation` (call-graph-aware risk) is deferred
   past v0.1.
 - Embedding quality is the embedder's; we don't fine-tune.

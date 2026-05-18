@@ -131,9 +131,28 @@ instructions in the file header). Not a CI step — CI has no dataset,
 LLM, or embedder; CI runs the harness on the bundled set with a
 fake embedder to guard the precision/recall/threshold math.
 
-**Status: the CodeNet run is in progress; the headline + baseline
-numbers and sampler config will be published here, honestly,
-when it completes.** It has not finished yet.
+**Result (seed 1729, 200 type-4 positives + 100 hard + 100 random
+negatives, 72 distinct problems, real `nomic-embed-text` over
+LLM-generated descriptions):**
+
+| set | threshold | precision | recall | F1 |
+|---|---|---|---|---|
+| **type-4 enforced (headline)** | 0.775 | 0.82 | 0.89 | **0.854** |
+| unfiltered same-problem (baseline) | 0.80 | 0.91 | 0.86 | 0.884 |
+
+The number that matters is not 0.854 in isolation — it's the
+**+0.030 contamination delta**: the structurally-hard type-4 set
+scores almost as high as the copy-paste-contaminated baseline. The
+method is *not* riding surface similarity; it's capturing semantic
+equivalence on genuinely-different-structure code. That small gap is
+the evidence the description-vector thesis holds.
+
+Calibration: 0.85 sits above the C4 ≈ 0.70 cross-language SOTA — but
+C4's figure is on *GPTCloneBench* and this is on *CodeNet-Python800*
+with a 400-pair sample, so this is **directional, not a strict
+"beats C4" claim**. Different dataset, different scale.
+Reproduce with `examples/codenet_eval.py` (config above is the
+frozen `SamplerConfig`; same seed + models → same number).
 
 CodeNet: <https://github.com/IBM/Project_CodeNet> ·
 CDLA-Permissive-2.0: <https://cdla.dev/permissive-2-0/> ·

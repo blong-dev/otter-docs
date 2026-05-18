@@ -17,6 +17,7 @@ from otter_docs.describe import DescriptionCache, SqliteDescriptionCache
 from otter_docs.detectors import run_all as _run_detectors
 from otter_docs.detectors.base import CostTier
 from otter_docs.discovery import is_tsx, iter_source_files
+from otter_docs.embedcache import EmbeddingCache, SqliteEmbeddingCache
 from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.llm_direct import (
@@ -101,6 +102,7 @@ class Repo:
         # connection so descriptions live in the same file as the
         # graph; for other backends we fall back to an in-memory dict.
         self._description_cache: DescriptionCache | None = None
+        self._embedding_cache: EmbeddingCache | None = None
 
     # ── functional in phase 1 ────────────────────────────────────────
 
@@ -233,6 +235,7 @@ class Repo:
         embedder: EmbeddingClient,
         *,
         description_cache: DescriptionCache | None = None,
+        embedding_cache: EmbeddingCache | None = None,
         max_embed_chars: int | None = None,
     ) -> EnrichReport:
         """Three-vector enrichment over every symbol the graph knows about.
@@ -261,9 +264,18 @@ class Repo:
             describer uses an ephemeral in-memory cache. Pass a
             `SqliteDescriptionCache` bound to a long-lived connection
             for persistent caching across runs.
+        embedding_cache :
+            Optional explicit embedding cache. If omitted, defaults the
+            same way the description cache does — persistent and
+            file-backed on a SqliteBackend, in-memory otherwise — so a
+            re-run makes zero embedder calls for unchanged symbols.
         """
         cache = description_cache or self._default_description_cache()
-        kwargs: dict = {"description_cache": cache}
+        emb_cache = embedding_cache or self._default_embedding_cache()
+        kwargs: dict = {
+            "description_cache": cache,
+            "embedding_cache": emb_cache,
+        }
         if max_embed_chars is not None:
             kwargs["max_embed_chars"] = max_embed_chars
         enricher = Enricher(self._backend, llm, embedder, **kwargs)
@@ -286,6 +298,25 @@ class Repo:
             from otter_docs.describe import _DictCache
             self._description_cache = _DictCache()
         return self._description_cache
+
+    def _default_embedding_cache(self) -> EmbeddingCache:
+        """Return (and memoize) this repo's default embedding cache.
+
+        Mirrors `_default_description_cache`: on a SqliteBackend the
+        vectors persist in the same graph.db file (sibling of
+        `code_descriptions`), so the nightly onboard/timer run reuses
+        them and only embeds new or changed symbols. Other backends get
+        a per-Repo in-memory cache; pass an explicit `embedding_cache=`
+        for persistence there.
+        """
+        if self._embedding_cache is not None:
+            return self._embedding_cache
+        if isinstance(self._backend, SqliteBackend):
+            self._embedding_cache = SqliteEmbeddingCache(self._backend.conn)
+        else:
+            from otter_docs.embedcache import InMemoryEmbeddingCache
+            self._embedding_cache = InMemoryEmbeddingCache()
+        return self._embedding_cache
 
     def findings(
         self,

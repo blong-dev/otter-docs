@@ -11,11 +11,14 @@ enrichment pass:
    - docstring (if any) → `docstring_vec`
 4. Upserts the symbol back into the backend with the three vectors.
 
-The enrichment pass is idempotent — re-running over an unchanged repo
-hits the description cache for every node and produces identical
-vectors (FakeEmbeddingClient is deterministic; real embedders should
-be too at temp 0). The backend's add_module/function/class methods
-upsert, so the second pass just replaces the existing rows in place.
+The enrichment pass is idempotent AND incremental — re-running over an
+unchanged repo hits the description cache (no LLM call) *and* the
+embedding cache (no embedder call) for every node, so a no-op re-run
+makes zero model round-trips. Only new or changed symbols cost a
+describe + embed. The backend's add_module/function/class methods
+upsert, so the second pass just replaces the existing rows in place
+with the cached vectors. See `describe.DescriptionCache` (LLM tier) and
+`embedcache.EmbeddingCache` (embedder tier).
 
 For v0.1 we embed the raw code slice (no AST normalization). The
 spec calls for normalized code in code_vec so semantically-equivalent
@@ -32,7 +35,13 @@ from pathlib import Path
 
 from otter_docs.backends.base import GraphBackend
 from otter_docs.clients.base import EmbeddingClient, LLMClient
-from otter_docs.describe import Describer, DescriptionCache
+from otter_docs.describe import Describer, DescriptionCache, content_hash
+from otter_docs.embedcache import (
+    CachedVectors,
+    EmbeddingCache,
+    InMemoryEmbeddingCache,
+    embed_model_id,
+)
 from otter_docs.models import ClassRecord, FunctionRecord, Language, ModuleRecord
 
 # Cap on how much of a module file we feed to the describer for module-
@@ -69,6 +78,7 @@ class EnrichReport:
     classes_enriched: int = 0
     cache_hits: int = 0
     embedding_calls: int = 0
+    embedding_cache_hits: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -136,12 +146,17 @@ class Enricher:
         embedder: EmbeddingClient,
         *,
         description_cache: DescriptionCache | None = None,
+        embedding_cache: EmbeddingCache | None = None,
         max_embed_chars: int = MAX_EMBED_CHARS,
     ) -> None:
         self.backend = backend
         self.llm = llm
         self.embedder = embedder
         self.describer = Describer(llm, description_cache)
+        self.embedding_cache: EmbeddingCache = (
+            embedding_cache or InMemoryEmbeddingCache()
+        )
+        self._embed_model = embed_model_id(embedder)
         self.max_embed_chars = max_embed_chars
 
     # ── high-level entry point ─────────────────────────────────────
@@ -212,6 +227,8 @@ class Enricher:
             report=report,
         )
         vectors = self._embed_three(
+            kind="module",
+            guid=module.path,
             description_text=desc.text,
             code_text=source.decode("utf-8", errors="replace"),
             docstring_text=module.docstring,
@@ -237,6 +254,8 @@ class Enricher:
             kind="function", guid=fn.guid, language=language, source=body, report=report
         )
         vectors = self._embed_three(
+            kind="function",
+            guid=fn.guid,
             description_text=desc.text,
             code_text=body.decode("utf-8", errors="replace"),
             docstring_text=fn.docstring,
@@ -260,6 +279,8 @@ class Enricher:
             kind="class", guid=cls.guid, language=language, source=body, report=report
         )
         vectors = self._embed_three(
+            kind="class",
+            guid=cls.guid,
             description_text=desc.text,
             code_text=body.decode("utf-8", errors="replace"),
             docstring_text=cls.docstring,
@@ -292,8 +313,8 @@ class Enricher:
         return desc
 
     def _embed_three(
-        self, *, description_text: str, code_text: str, docstring_text: str,
-        report: EnrichReport,
+        self, *, kind: str, guid: str, description_text: str,
+        code_text: str, docstring_text: str, report: EnrichReport,
     ) -> tuple[list[float], list[float], list[float] | None]:
         dim = self.embedder.dim
         # All three texts are truncated to the embedder's safe budget.
@@ -302,18 +323,51 @@ class Enricher:
         # are usually well under, but bounding all three keeps the
         # implementation uniform and the failure mode predictable.
         cap = self.max_embed_chars
-        texts = [
-            _truncate_for_embed(description_text, max_chars=cap),
-            _truncate_for_embed(code_text, max_chars=cap),
-        ]
+        desc_t = _truncate_for_embed(description_text, max_chars=cap)
+        code_t = _truncate_for_embed(code_text, max_chars=cap)
         has_doc = bool(docstring_text)
+        doc_t = (
+            _truncate_for_embed(docstring_text, max_chars=cap)
+            if has_doc else None
+        )
+
+        # Key on the literal embedder inputs: a hit means "we have
+        # already embedded exactly these three texts with this model".
+        # A NUL join can't be forged by any text boundary.
+        key = content_hash(
+            "\x00".join([desc_t, code_t, doc_t or ""]).encode(
+                "utf-8", errors="replace"
+            )
+        )
+        cached = self.embedding_cache.get(
+            key, embed_model=self._embed_model, dim=dim
+        )
+        if cached is not None:
+            report.embedding_cache_hits += 1
+            return (
+                _norm_dim(cached.description_vec, dim),
+                _norm_dim(cached.code_vec, dim),
+                _norm_dim(cached.docstring_vec, dim)
+                if cached.docstring_vec is not None else None,
+            )
+
+        texts = [desc_t, code_t]
         if has_doc:
-            texts.append(_truncate_for_embed(docstring_text, max_chars=cap))
+            texts.append(doc_t)
         vectors = self.embedder.embed(texts)
         report.embedding_calls += 1
         desc_vec = _norm_dim(vectors[0], dim)
         code_vec = _norm_dim(vectors[1], dim)
         doc_vec = _norm_dim(vectors[2], dim) if has_doc else None
+        self.embedding_cache.put(
+            key, embed_model=self._embed_model, dim=dim, kind=kind,
+            guid=guid,
+            vectors=CachedVectors(
+                description_vec=desc_vec,
+                code_vec=code_vec,
+                docstring_vec=doc_vec,
+            ),
+        )
         return desc_vec, code_vec, doc_vec
 
     @staticmethod

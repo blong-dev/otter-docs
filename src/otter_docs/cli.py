@@ -129,6 +129,78 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_onboard(args: argparse.Namespace) -> int:
+    from otter_docs.onboarding import load_manifest, onboard_all
+
+    manifest = load_manifest(args.manifest)
+    enrich = False if args.no_enrich else None
+    results = onboard_all(manifest, only=args.repo, enrich=enrich)
+    if not results:
+        print("nothing to onboard (no matching repos in manifest)",
+              file=sys.stderr)
+        return 1
+    failed = 0
+    for r in results:
+        tag = "ok" if r.ok else "FAIL"
+        print(f"[{tag}] {r.name}: {r.scanned} files, "
+              f"{r.resolved_edges} edges, {r.findings} findings, "
+              f"enriched={r.enriched}, {r.seconds}s")
+        for d in r.degradations:
+            print(f"    degraded: {d}")
+        for e in r.errors:
+            print(f"    error: {e}", file=sys.stderr)
+        if not r.ok:
+            failed += 1
+    return 1 if failed else 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    from otter_docs.onboarding import (
+        collect_status,
+        load_manifest,
+        status_is_healthy,
+    )
+
+    manifest = load_manifest(args.manifest)
+    statuses = collect_status(manifest)
+    for s in statuses:
+        flag = "OK  " if (s.ok and not s.stale and not s.errors) else "BAD "
+        age = f"{s.age_seconds/3600:.1f}h" if s.age_seconds is not None else "—"
+        stale = " STALE" if s.stale else ""
+        print(f"[{flag}] {s.name}: last={s.last_onboard or 'never'} "
+              f"age={age}{stale} scanned={s.scanned} "
+              f"findings={s.findings} enriched={s.enriched}")
+        for d in s.degradations:
+            print(f"    degraded: {d}")
+        for e in s.errors:
+            print(f"    error: {e}")
+    # Exit non-zero if anything is unhealthy → usable as a cron/CI
+    # health check.
+    return 0 if status_is_healthy(statuses) else 1
+
+
+def cmd_systemd(args: argparse.Namespace) -> int:
+    import getpass
+
+    from otter_docs.onboarding import systemd_units
+
+    units = systemd_units(
+        manifest_path=str(Path(args.manifest).resolve()),
+        user=args.user or getpass.getuser(),
+        on_calendar=args.on_calendar,
+    )
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for fname, text in units.items():
+        (out_dir / fname).write_text(text, encoding="utf-8")
+        print(f"wrote {out_dir / fname}")
+    print("\nInstall (we never auto-sudo):")
+    print(f"  sudo cp {out_dir}/otter-docs-onboard.* /etc/systemd/system/")
+    print("  sudo systemctl daemon-reload")
+    print("  sudo systemctl enable --now otter-docs-onboard.timer")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="otter-docs", description="Polyglot codebase inspection.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -170,6 +242,36 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("serve", help="run the MCP server (needs [mcp] extra)")
     add_path(sp)
     sp.set_defaults(func=cmd_serve)
+
+    sp = sub.add_parser(
+        "onboard",
+        help="idempotently onboard every repo in a manifest "
+             "(scan+resolve+enrich+render+hooks)",
+    )
+    sp.add_argument("--manifest", required=True, help="path to repos.toml")
+    sp.add_argument("--repo", help="onboard only this repo by name")
+    sp.add_argument("--no-enrich", action="store_true",
+                    help="force structural-only (skip the semantic tier)")
+    sp.set_defaults(func=cmd_onboard)
+
+    sp = sub.add_parser(
+        "status",
+        help="per-repo heartbeat from a manifest; exits non-zero if "
+             "any repo is stale or errored",
+    )
+    sp.add_argument("--manifest", required=True, help="path to repos.toml")
+    sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser(
+        "systemd",
+        help="emit the scheduled-onboard systemd unit files",
+    )
+    sp.add_argument("--manifest", required=True, help="path to repos.toml")
+    sp.add_argument("--out-dir", default=".", help="where to write the unit files")
+    sp.add_argument("--user", help="systemd User= (default: current user)")
+    sp.add_argument("--on-calendar", default="*-*-* 03:30:00",
+                    help="systemd OnCalendar= (default: daily 03:30)")
+    sp.set_defaults(func=cmd_systemd)
 
     return p
 

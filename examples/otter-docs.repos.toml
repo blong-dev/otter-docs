@@ -1,0 +1,37 @@
+# otter-docs multi-repo manifest — the declarative source of truth.
+#
+# Onboard everything:   otter-docs onboard --manifest otter-docs.repos.toml
+# One repo:             otter-docs onboard --manifest ... --repo myapp
+# Fast tier only:       otter-docs onboard --manifest ... --no-enrich
+# Health check:         otter-docs status  --manifest ...   (exit != 0 if stale/errored)
+# Scheduled slow tier:  otter-docs systemd --manifest ...   (emits unit files)
+#
+# Env vars override [defaults] per-machine without editing this file:
+#   OTTER_LLM_URL / OTTER_LLM_MODEL / OTTER_EMBED_URL / OTTER_EMBED_MODEL / OTTER_EMBED_DIM
+
+[defaults]
+llm_url     = "http://localhost:11434"
+llm_model   = "qwen3.5:9b"
+embed_url   = "http://localhost:11435"
+embed_model = "nomic-embed-text"
+embed_dim   = 768
+
+[[repo]]
+name   = "myapp"
+path   = "/abs/path/to/myapp"
+enrich = true            # run the semantic tier (LLM + embedder)
+doc    = "docs/SYSTEM.md"
+
+[[repo]]
+name   = "frontend"
+path   = "/abs/path/to/frontend"
+enrich = false           # structural-only: fast, free, no model needed
+doc    = "SYSTEM.md"
+
+# Per-repo model override (rare — most repos use [defaults]):
+# [[repo]]
+# name = "special"
+# path = "/abs/path/to/special"
+# [repo.models]
+# llm_url = "http://gpu-box:11434"
+# embed_dim = 1024

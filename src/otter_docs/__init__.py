@@ -24,6 +24,15 @@ from otter_docs.models import (
     SimilarityHit,
     VectorKind,
 )
+from otter_docs.onboarding import (
+    Manifest,
+    ModelConfig,
+    RepoEntry,
+    collect_status,
+    load_manifest,
+    onboard_all,
+    onboard_repo,
+)
 from otter_docs.repo import Repo, ScanReport
 from otter_docs.resolvers.base import ResolveReport
 
@@ -48,11 +57,14 @@ __all__ = [
     "LLMClient",
     "Language",
     "Location",
+    "Manifest",
+    "ModelConfig",
     "ModuleRecord",
     "OllamaEmbeddingClient",
     "OllamaLLMClient",
     "Recommendation",
     "Repo",
+    "RepoEntry",
     "ResolveReport",
     "Review",
     "ScanReport",
@@ -60,4 +72,8 @@ __all__ = [
     "SqliteBackend",
     "SqliteDescriptionCache",
     "VectorKind",
+    "collect_status",
+    "load_manifest",
+    "onboard_all",
+    "onboard_repo",
 ]

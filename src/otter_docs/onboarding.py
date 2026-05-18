@@ -413,6 +413,7 @@ def systemd_units(
     user: str,
     otter_docs_bin: str = "otter-docs",
     on_calendar: str = "*-*-* 03:30:00",
+    path_env: str | None = None,
 ) -> dict[str, str]:
     """Return {'otter-docs-onboard.service': ..., '.timer': ...} text.
 
@@ -427,7 +428,15 @@ def systemd_units(
         sudo systemctl enable --now otter-docs-onboard.timer
 
     We never auto-sudo; this only emits the text.
+
+    CRITICAL: `otter_docs_bin` must be an ABSOLUTE path and `path_env`
+    must include the resolver tooling (gopls/tsserver) dirs. systemd
+    runs with a minimal environment — a bare `otter-docs` or a PATH
+    without the language servers produces a unit that *silently
+    fails*, which is precisely the rot this feature exists to
+    prevent. The CLI resolves both from the live environment.
     """
+    env_line = f"Environment=PATH={path_env}\n" if path_env else ""
     service = f"""\
 [Unit]
 Description=otter-docs scheduled onboard (semantic tier, all repos)
@@ -437,7 +446,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User={user}
-ExecStart={otter_docs_bin} onboard --manifest {manifest_path}
+{env_line}ExecStart={otter_docs_bin} onboard --manifest {manifest_path}
 TimeoutStartSec=7200
 """
     timer = f"""\

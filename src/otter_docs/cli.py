@@ -181,13 +181,38 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_systemd(args: argparse.Namespace) -> int:
     import getpass
+    import os
+    import shutil
 
     from otter_docs.onboarding import systemd_units
 
+    # Resolve an ABSOLUTE otter-docs path. systemd has no PATH; a bare
+    # name silently fails. Prefer the running interpreter's bin dir
+    # (the venv this CLI is installed in), fall back to which().
+    bin_dir = Path(sys.executable).parent
+    cand = bin_dir / "otter-docs"
+    otter_bin = str(cand) if cand.exists() else (
+        shutil.which("otter-docs") or "otter-docs"
+    )
+    # Build a PATH that includes the venv bin + wherever the resolver
+    # language servers (gopls / typescript-language-server) currently
+    # live, so the scheduled run has the same coverage as this shell.
+    path_parts: list[str] = [str(bin_dir)]
+    for tool in ("gopls", "typescript-language-server", "node", "go"):
+        p = shutil.which(tool)
+        if p:
+            d = str(Path(p).parent)
+            if d not in path_parts:
+                path_parts.append(d)
+    for sysdir in ("/usr/local/bin", "/usr/bin", "/bin"):
+        if sysdir not in path_parts:
+            path_parts.append(sysdir)
     units = systemd_units(
         manifest_path=str(Path(args.manifest).resolve()),
         user=args.user or getpass.getuser(),
+        otter_docs_bin=otter_bin,
         on_calendar=args.on_calendar,
+        path_env=os.pathsep.join(path_parts),
     )
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

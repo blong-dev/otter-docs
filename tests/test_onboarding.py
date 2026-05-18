@@ -204,17 +204,29 @@ def test_status_handles_corrupt_heartbeat(tmp_path: Path):
 
 
 def test_systemd_units_shape():
-    units = systemd_units(manifest_path="/etc/otter/repos.toml",
-                          user="b", on_calendar="*-*-* 03:30:00")
+    units = systemd_units(
+        manifest_path="/etc/otter/repos.toml", user="b",
+        otter_docs_bin="/opt/venv/bin/otter-docs",
+        on_calendar="*-*-* 03:30:00",
+        path_env="/opt/venv/bin:/usr/local/bin:/usr/bin",
+    )
     assert set(units) == {"otter-docs-onboard.service",
                           "otter-docs-onboard.timer"}
     svc = units["otter-docs-onboard.service"]
     assert "User=b" in svc
-    assert "onboard --manifest /etc/otter/repos.toml" in svc
+    # ABSOLUTE bin path — a bare name silently fails under systemd.
+    assert "ExecStart=/opt/venv/bin/otter-docs onboard --manifest /etc/otter/repos.toml" in svc
+    assert "Environment=PATH=/opt/venv/bin:/usr/local/bin:/usr/bin" in svc
     assert "Type=oneshot" in svc
     timer = units["otter-docs-onboard.timer"]
     assert "OnCalendar=*-*-* 03:30:00" in timer
     assert "Persistent=true" in timer
+
+
+def test_systemd_units_no_path_env_omits_environment_line():
+    units = systemd_units(manifest_path="/m.toml", user="u",
+                          otter_docs_bin="/b/otter-docs")
+    assert "Environment=PATH=" not in units["otter-docs-onboard.service"]
 
 
 # ── CLI surface ─────────────────────────────────────────────────────────

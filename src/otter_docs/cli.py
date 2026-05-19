@@ -130,11 +130,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_onboard(args: argparse.Namespace) -> int:
-    from otter_docs.onboarding import load_manifest, onboard_all
+    from otter_docs.onboarding import (
+        default_onboard_lock_path,
+        load_manifest,
+        onboard_all,
+        onboard_lock,
+    )
 
     manifest = load_manifest(args.manifest)
     enrich = False if args.no_enrich else None
-    results = onboard_all(manifest, only=args.repo, enrich=enrich)
+    with onboard_lock(default_onboard_lock_path(args.manifest)) as acquired:
+        if not acquired:
+            # Another onboard holds the lock. Skipping is the correct,
+            # non-error outcome: rc 0 keeps the systemd oneshot green;
+            # the Persistent daily timer reprocesses next cycle.
+            print(
+                "another otter-docs onboard is already running for this "
+                "manifest — skipping this run (not an error)",
+                file=sys.stderr,
+            )
+            return 0
+        results = onboard_all(manifest, only=args.repo, enrich=enrich)
     if not results:
         print("nothing to onboard (no matching repos in manifest)",
               file=sys.stderr)

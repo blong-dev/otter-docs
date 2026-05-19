@@ -23,11 +23,17 @@ Five pieces, all here:
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import hashlib
 import json
 import os
 import shutil
+import sqlite3
+import tempfile
 import time
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -227,6 +233,21 @@ def onboard_repo(entry: RepoEntry, models: ModelConfig) -> OnboardResult:
                 )
 
         result.ok = not result.errors
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e).lower():
+            # A concurrent writer slipped past the onboard lock (e.g. a
+            # manual `otter-docs scan` during the timer window). This
+            # is transient and self-correcting — the next scheduled run
+            # reprocesses. Degrade, never FAIL: a momentary lock must
+            # not flip the systemd oneshot to failed (the exact prod
+            # bug this guard exists to kill).
+            result.degradations.append(
+                "skipped this run: graph.db locked by a concurrent "
+                "process (next scheduled run reprocesses)"
+            )
+            result.ok = not result.errors
+        else:
+            result.errors.append(f"{type(e).__name__}: {e}")
     except Exception as e:
         result.errors.append(f"{type(e).__name__}: {e}")
 
@@ -308,6 +329,71 @@ def _write_heartbeat(
         }, indent=2), encoding="utf-8")
     except OSError:
         pass
+
+
+# ── concurrency guard ───────────────────────────────────────────────────
+#
+# Two `onboard` runs over the same manifest hit the same SQLite
+# graph.db files and produce `database is locked` churn. Observed in
+# prod 2026-05-19: the nightly timer overlapped a leftover manual
+# catch-up run, v3's leg hard-failed (0 files), and the systemd
+# oneshot service exited 1/FAILURE. The fix is twofold: an exclusive
+# inter-process lock so runs never overlap (here), and a soft-degrade
+# on any residual lock so a transient never FAILs the service
+# (onboard_repo's except handler).
+
+
+def default_onboard_lock_path(manifest_path: str | Path) -> Path:
+    """Stable lock path for a given manifest.
+
+    Keyed on the resolved manifest path so distinct manifests don't
+    block each other but the same manifest always maps to one lock.
+    Lives in the system temp dir — robust to a read-only manifest dir
+    and conventional for a runtime lock.
+    """
+    h = hashlib.sha1(
+        str(Path(manifest_path).resolve()).encode()
+    ).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"otter-docs-onboard-{h}.lock"
+
+
+@contextlib.contextmanager
+def onboard_lock(lock_path: str | Path) -> Iterator[bool]:
+    """Exclusive, non-blocking inter-process lock for a full onboard run.
+
+    Yields True if this process holds the lock; False if another
+    onboard already holds it (caller should skip this cycle — a
+    concurrent run just produces lock churn, and a daily Persistent
+    timer reprocesses next cycle anyway).
+
+    flock is advisory and bound to the open fd, so the OS releases it
+    automatically if the holder is SIGKILLed/OOM-ed — no stale lock to
+    clean up, unlike a bare lockfile-exists check. No-ops to True where
+    `fcntl` is unavailable (non-Linux); the systemd timer this guards
+    is Linux-only.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield True
+        return
+    p = Path(lock_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    f = open(p, "w")
+    try:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            if e.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                yield False
+                return
+            raise
+        try:
+            yield True
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    finally:
+        f.close()
 
 
 def onboard_all(

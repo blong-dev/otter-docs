@@ -7,6 +7,7 @@ the path we assert.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,10 @@ from otter_docs.onboarding import (
     ModelConfig,
     RepoEntry,
     collect_status,
+    default_onboard_lock_path,
     load_manifest,
     onboard_all,
+    onboard_lock,
     onboard_repo,
     status_is_healthy,
     systemd_units,
@@ -283,3 +286,101 @@ def test_manifest_requires_core_fields(tmp_path: Path, missing):
     else:
         with pytest.raises(KeyError):
             load_manifest(p)
+
+
+# ── concurrency guard ───────────────────────────────────────────────────
+
+
+def test_default_onboard_lock_path_stable_and_distinct(tmp_path: Path):
+    m1 = tmp_path / "a.toml"
+    m1.write_text("")
+    m2 = tmp_path / "b.toml"
+    m2.write_text("")
+    # Same manifest → same lock; different manifest → different lock.
+    assert default_onboard_lock_path(m1) == default_onboard_lock_path(m1)
+    assert default_onboard_lock_path(m1) != default_onboard_lock_path(m2)
+
+
+def test_onboard_lock_is_exclusive(tmp_path: Path):
+    lp = tmp_path / "x.lock"
+    with onboard_lock(lp) as a:
+        assert a is True
+        # A second acquisition while held must report "not acquired".
+        with onboard_lock(lp) as b:
+            assert b is False
+    # Released on context exit → re-acquirable.
+    with onboard_lock(lp) as c:
+        assert c is True
+
+
+def test_cli_onboard_skips_cleanly_when_locked(tmp_path: Path, capsys):
+    from otter_docs.cli import main
+
+    r = _py_repo(tmp_path, "r1")
+    mpath = _write_manifest(tmp_path, [("r1", r, False)])
+    with onboard_lock(default_onboard_lock_path(mpath)) as held:
+        assert held is True
+        rc = main(["onboard", "--manifest", str(mpath)])
+    # Skipped run is rc 0 (keeps the systemd oneshot green), says so,
+    # and did NOT run onboarding (no heartbeat written).
+    assert rc == 0
+    assert "skipping" in capsys.readouterr().err
+    assert not (r / ".otter-docs" / "status.json").exists()
+
+
+def test_database_locked_degrades_not_fails(tmp_path: Path, monkeypatch):
+    """A residual `database is locked` must degrade (ok=True + note),
+    never FAIL — that flip to failed is the exact prod bug."""
+    import otter_docs
+
+    r = _py_repo(tmp_path, "r1")
+
+    class _LockedRepo:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def scan(self, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(otter_docs, "Repo", _LockedRepo)
+    res = onboard_repo(
+        RepoEntry(name="r1", path=str(r), enrich=False, install_hooks=False),
+        ModelConfig(),
+    )
+    assert res.ok is True
+    assert res.errors == []
+    assert any("locked" in d for d in res.degradations)
+
+
+def test_other_operational_error_still_fails(tmp_path: Path, monkeypatch):
+    """Only the lock message degrades; a real DB error is still an error."""
+    import otter_docs
+
+    r = _py_repo(tmp_path, "r1")
+
+    class _BrokenRepo:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def scan(self, **k):
+            raise sqlite3.OperationalError("no such table: code_modules")
+
+    monkeypatch.setattr(otter_docs, "Repo", _BrokenRepo)
+    res = onboard_repo(
+        RepoEntry(name="r1", path=str(r), enrich=False, install_hooks=False),
+        ModelConfig(),
+    )
+    assert res.ok is False
+    assert any("no such table" in e for e in res.errors)

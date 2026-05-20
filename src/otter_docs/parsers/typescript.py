@@ -20,6 +20,7 @@ import hashlib
 import tree_sitter_typescript
 from tree_sitter import Language, Node, Parser
 
+from otter_docs.guids import resolve_guid
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -108,10 +109,16 @@ class _TSParserBase:
         edges: list[Edge] = []
         pending_calls: list[tuple[str, str]] = []
 
-        def emit_fn(name: str, node: Node, params: Node | None) -> str:
+        def emit_fn(
+            name: str, node: Node, params: Node | None,
+            *, marker_anchor: Node | None = None,
+        ) -> str:
             line = node.start_point.row + 1
             end = node.end_point.row + 1
-            guid = _guid(repo, path, name, line)
+            anchor = (marker_anchor or node).start_point.row
+            guid = resolve_guid(
+                source, anchor, _guid(repo, path, name, line)
+            )
             is_async = any(
                 c.type == "async" or (c.is_named and c.type == "async") for c in node.children
             )
@@ -144,10 +151,15 @@ class _TSParserBase:
                     if name_node is None or value is None:
                         continue
                     if value.type in ("arrow_function", "function_expression"):
+                        # Marker anchor = the outer `const`/`let`/`var`
+                        # declaration line, where a developer would
+                        # write `// guid:…`, not the arrow expression's
+                        # interior line.
                         guid = emit_fn(
                             name_node.text.decode("utf-8", errors="replace"),
                             value,
                             value.child_by_field_name("parameters"),
+                            marker_anchor=node,
                         )
                         body = value.child_by_field_name("body")
                         if body is not None:
@@ -160,7 +172,10 @@ class _TSParserBase:
                 cls_name = _name(node) or "<anonymous>"
                 line = node.start_point.row + 1
                 end = node.end_point.row + 1
-                cls_guid = _guid(repo, path, f"class:{cls_name}", line)
+                cls_guid = resolve_guid(
+                    source, node.start_point.row,
+                    _guid(repo, path, f"class:{cls_name}", line),
+                )
                 classes.append(ClassRecord(
                     repo=repo, guid=cls_guid, name=cls_name, module_path=path,
                     line=line, end_line=end,

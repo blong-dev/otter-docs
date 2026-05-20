@@ -84,6 +84,12 @@ class RepoEntry(BaseModel):
     doc: str = "SYSTEM.md"
     # Install git hooks during onboarding?
     install_hooks: bool = True
+    # Assign inline `# guid:` / `// guid:` markers to functions/classes
+    # missing them, BEFORE scan. Opt-in because it MUTATES source —
+    # the first run on an unmarked repo inserts a marker line per def.
+    # Markers become the symbol's primary key across otter-docs, v3's
+    # Neo4j code graph, and the Kanban/REFACTOR plan's diff-walker.
+    assign_guids: bool = False
     # Optional per-repo model override (else manifest defaults).
     models: ModelConfig | None = None
 
@@ -133,6 +139,7 @@ def load_manifest(path: str | Path) -> Manifest:
             enrich=r.get("enrich", True),
             doc=r.get("doc", "SYSTEM.md"),
             install_hooks=r.get("install_hooks", True),
+            assign_guids=r.get("assign_guids", False),
             models=models,
         ))
     return Manifest(defaults=defaults, repos=repos)
@@ -150,6 +157,7 @@ class OnboardResult:
     resolved_edges: int = 0
     enriched: bool = False
     findings: int = 0
+    assigned_guids: int = 0
     degradations: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     seconds: float = 0.0
@@ -203,6 +211,23 @@ def onboard_repo(entry: RepoEntry, models: ModelConfig) -> OnboardResult:
     for lang, present in tooling.items():
         if not present:
             result.degradations.append(f"{lang} unavailable → AST-only edges")
+
+    # Assign inline guid markers BEFORE scan so the scanner picks them
+    # up as the symbol's `guid`. Opt-in (mutates source); on a marked
+    # repo this is idempotent and a no-op.
+    if entry.assign_guids:
+        try:
+            from otter_docs.guids import assign_missing_markers_in_repo
+            ar = assign_missing_markers_in_repo(root)
+            result.assigned_guids = ar.markers_inserted
+            if ar.errors:
+                result.degradations.append(
+                    f"{len(ar.errors)} files failed guid assignment"
+                )
+        except Exception as e:
+            result.degradations.append(
+                f"guid assignment skipped: {type(e).__name__}: {e}"
+            )
 
     try:
         with Repo(root, name=entry.name) as repo:
@@ -322,6 +347,7 @@ def _write_heartbeat(
             "resolved_edges": result.resolved_edges,
             "enriched": result.enriched,
             "findings": result.findings,
+            "assigned_guids": result.assigned_guids,
             "degradations": result.degradations,
             "errors": result.errors,
             "seconds": result.seconds,

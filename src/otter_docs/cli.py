@@ -129,6 +129,49 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_assign_guids(args: argparse.Namespace) -> int:
+    from otter_docs.guids import (
+        AssignReport,
+        assign_missing_markers_in_file,
+        assign_missing_markers_in_repo,
+    )
+
+    targets = args.paths or ["."]
+    report = AssignReport()
+    for raw in targets:
+        p = Path(raw).resolve()
+        if not p.exists():
+            report.errors.append((str(p), "path does not exist"))
+            continue
+        if p.is_file():
+            report.files_scanned += 1
+            try:
+                count, changed = assign_missing_markers_in_file(p)
+            except Exception as e:
+                report.errors.append((str(p), f"{type(e).__name__}: {e}"))
+                continue
+            if changed:
+                report.files_changed += 1
+                report.markers_inserted += count
+        else:
+            sub = assign_missing_markers_in_repo(p)
+            report.files_scanned += sub.files_scanned
+            report.files_changed += sub.files_changed
+            report.markers_inserted += sub.markers_inserted
+            report.errors.extend(sub.errors)
+    print(
+        f"assigned {report.markers_inserted} markers "
+        f"across {report.files_changed}/{report.files_scanned} files"
+    )
+    for path, msg in report.errors:
+        print(f"    error: {path}: {msg}", file=sys.stderr)
+    if args.check:
+        # CI gate: nonzero if any markers were missing. NOTE: this
+        # still writes them — the check is "would I have needed to?".
+        return 1 if report.markers_inserted > 0 else 0
+    return 0
+
+
 def cmd_onboard(args: argparse.Namespace) -> int:
     from otter_docs.onboarding import (
         default_onboard_lock_path,
@@ -274,6 +317,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out", default="SYSTEM.md", help="document filename")
     sp.add_argument("--no-resolve", action="store_true")
     sp.set_defaults(func=cmd_render)
+
+    sp = sub.add_parser(
+        "assign-guids",
+        help="insert # guid:<uuid> / // guid:<uuid> markers above every "
+             "function/class def that doesn't already have one. "
+             "Accepts a repo root, a directory, or individual files. "
+             "Idempotent; safe to run repeatedly.",
+    )
+    sp.add_argument(
+        "paths", nargs="*",
+        help="repo root, directories, or specific files (default: .)",
+    )
+    sp.add_argument(
+        "--check", action="store_true",
+        help="CI gate: exit non-zero if any markers were missing "
+             "(still inserts them — pair with `git diff` for a pure check)",
+    )
+    sp.set_defaults(func=cmd_assign_guids)
 
     sp = sub.add_parser("install-hooks", help="install git pre-commit/pre-push hooks")
     add_path(sp)

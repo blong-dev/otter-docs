@@ -18,6 +18,7 @@ import hashlib
 import tree_sitter_go
 from tree_sitter import Language, Node, Parser
 
+from otter_docs.guids import resolve_guid
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -131,7 +132,10 @@ class GoParser:
                 name = _name(child)
                 line = child.start_point.row + 1
                 end = child.end_point.row + 1
-                guid = _guid(repo, path, name, line)
+                guid = resolve_guid(
+                    source, child.start_point.row,
+                    _guid(repo, path, name, line),
+                )
                 fn = FunctionRecord(
                     repo=repo, guid=guid, name=name, module_path=path,
                     line=line, end_line=end, args=_args(child),
@@ -151,7 +155,10 @@ class GoParser:
                 qualified = f"{recv}.{name}" if recv else name
                 line = child.start_point.row + 1
                 end = child.end_point.row + 1
-                guid = _guid(repo, path, qualified, line)
+                guid = resolve_guid(
+                    source, child.start_point.row,
+                    _guid(repo, path, qualified, line),
+                )
                 fn = FunctionRecord(
                     repo=repo, guid=guid, name=qualified, module_path=path,
                     line=line, end_line=end, args=_args(child),
@@ -173,7 +180,14 @@ class GoParser:
                         type_name = _name(spec)
                         line = spec.start_point.row + 1
                         end = spec.end_point.row + 1
-                        guid = _guid(repo, path, f"class:{type_name}", line)
+                        # type declarations: marker anchor is the
+                        # outer `type_declaration` line (where a Go
+                        # developer would put the comment), not the
+                        # inner spec when it's part of a `type ( … )` block.
+                        guid = resolve_guid(
+                            source, child.start_point.row,
+                            _guid(repo, path, f"class:{type_name}", line),
+                        )
                         classes.append(ClassRecord(
                             repo=repo, guid=guid, name=type_name, module_path=path,
                             line=line, end_line=end,

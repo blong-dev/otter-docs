@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import tree_sitter_python
 from tree_sitter import Language, Node, Parser
 
+from otter_docs.guids import resolve_guid
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -76,6 +77,7 @@ def _name(node: Node, field: str = "name") -> str:
 class _Walker:
     repo: str
     path: str
+    source: bytes  # needed to honor inline `# guid:` markers
     functions: list[FunctionRecord]
     classes: list[ClassRecord]
     edges: list[Edge]
@@ -88,7 +90,10 @@ class _Walker:
         name = _name(node)
         line = node.start_point.row + 1
         end = node.end_point.row + 1
-        guid = _guid(self.repo, self.path, name, line)
+        guid = resolve_guid(
+            self.source, node.start_point.row,
+            _guid(self.repo, self.path, name, line),
+        )
         body = node.child_by_field_name("body")
         is_async = node.type == "function_definition" and any(
             c.type == "async" for c in node.children
@@ -141,7 +146,10 @@ class _Walker:
         name = _name(node)
         line = node.start_point.row + 1
         end = node.end_point.row + 1
-        guid = _guid(self.repo, self.path, f"class:{name}", line)
+        guid = resolve_guid(
+            self.source, node.start_point.row,
+            _guid(self.repo, self.path, f"class:{name}", line),
+        )
         body = node.child_by_field_name("body")
         record = ClassRecord(
             repo=self.repo,
@@ -263,7 +271,8 @@ class PythonParser:
             imports=_imports(root),
         )
         walker = _Walker(
-            repo=repo, path=path, functions=[], classes=[], edges=[], pending_calls=[]
+            repo=repo, path=path, source=source,
+            functions=[], classes=[], edges=[], pending_calls=[],
         )
         for child in root.named_children:
             walker._visit(child, current_function_guid=None, parent_class_guid=None)

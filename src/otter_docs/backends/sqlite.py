@@ -169,6 +169,7 @@ class SqliteBackend:
                 returns TEXT NOT NULL DEFAULT '',
                 is_async INTEGER NOT NULL DEFAULT 0,
                 tags TEXT NOT NULL DEFAULT '[]',
+                cyclomatic_complexity INTEGER,
                 updated_at TEXT,
                 UNIQUE(repo, guid)
             );
@@ -214,6 +215,17 @@ class SqliteBackend:
                     f"embedding float[{self.vector_dim}]"
                     f")"
                 )
+
+        # ── Additive column migrations (idempotent) ───────────────────
+        # SQLite has no `ADD COLUMN IF NOT EXISTS`; gate on PRAGMA.
+        existing_cols = {
+            r[1] for r in c.execute("PRAGMA table_info(code_functions)").fetchall()
+        }
+        if "cyclomatic_complexity" not in existing_cols:
+            c.execute(
+                "ALTER TABLE code_functions "
+                "ADD COLUMN cyclomatic_complexity INTEGER"
+            )
 
         c.commit()
 
@@ -282,8 +294,8 @@ class SqliteBackend:
                 INSERT INTO code_functions (repo, guid, name, module_path,
                                             line, end_line, docstring,
                                             args, returns, is_async, tags,
-                                            updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            cyclomatic_complexity, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repo, guid) DO UPDATE SET
                     name=excluded.name,
                     module_path=excluded.module_path,
@@ -294,6 +306,7 @@ class SqliteBackend:
                     returns=excluded.returns,
                     is_async=excluded.is_async,
                     tags=excluded.tags,
+                    cyclomatic_complexity=excluded.cyclomatic_complexity,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -302,7 +315,9 @@ class SqliteBackend:
                     function.docstring,
                     json.dumps(function.args), function.returns,
                     1 if function.is_async else 0,
-                    json.dumps(function.tags), _iso(function.updated_at),
+                    json.dumps(function.tags),
+                    function.cyclomatic_complexity,
+                    _iso(function.updated_at),
                 ),
             )
             rowid = self.conn.execute(
@@ -525,6 +540,61 @@ class SqliteBackend:
 
     # ── lifecycle helpers ────────────────────────────────────────────
 
+    def delete_orphans_in_module(
+        self,
+        repo: str,
+        path: str,
+        *,
+        keep_function_guids: set[str],
+        keep_class_guids: set[str],
+    ) -> int:
+        """Delete code_functions / code_classes rows for this module
+        whose guid isn't in the keep set; cascade vec rows.
+
+        Idempotent — re-running with the same keep sets after the
+        first call deletes nothing.
+        """
+        count = 0
+        with self.conn:
+            for plural, keep in (
+                ("functions", keep_function_guids),
+                ("classes", keep_class_guids),
+            ):
+                parent = f"code_{plural}"
+                # Fetch (rowid, guid) for orphans so we can cascade vec rows.
+                if keep:
+                    placeholders = ",".join("?" * len(keep))
+                    rows = self.conn.execute(
+                        f"SELECT rowid FROM {parent} "
+                        f"WHERE repo = ? AND module_path = ? "
+                        f"AND guid NOT IN ({placeholders})",
+                        (repo, path, *keep),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        f"SELECT rowid FROM {parent} "
+                        f"WHERE repo = ? AND module_path = ?",
+                        (repo, path),
+                    ).fetchall()
+                rowids = [r[0] for r in rows]
+                if not rowids:
+                    continue
+                # Cascade vec rows.
+                rid_placeholders = ",".join("?" * len(rowids))
+                for vec_kind in _VEC_KINDS:
+                    self.conn.execute(
+                        f"DELETE FROM vec_{plural}_{vec_kind} "
+                        f"WHERE rowid IN ({rid_placeholders})",
+                        rowids,
+                    )
+                # Then the parent rows.
+                self.conn.execute(
+                    f"DELETE FROM {parent} WHERE rowid IN ({rid_placeholders})",
+                    rowids,
+                )
+                count += len(rowids)
+        return count
+
     def reset(self, *, repo: str | None = None) -> None:
         with self.conn:
             if repo is None:
@@ -594,6 +664,13 @@ class SqliteBackend:
 
     def _row_to_function(self, row: sqlite3.Row) -> FunctionRecord:
         vecs = self._vectors_for("functions", row["rowid"])
+        # cyclomatic_complexity may be absent on rows from a graph.db
+        # written before the column existed; SQLite returns None for
+        # those, which matches the Pydantic default.
+        cc = (
+            row["cyclomatic_complexity"]
+            if "cyclomatic_complexity" in row.keys() else None
+        )
         return FunctionRecord(
             repo=row["repo"],
             guid=row["guid"],
@@ -606,6 +683,7 @@ class SqliteBackend:
             returns=row["returns"],
             is_async=bool(row["is_async"]),
             tags=json.loads(row["tags"]),
+            cyclomatic_complexity=cc,
             updated_at=_parse_iso(row["updated_at"]),
             description_vec=vecs["description"],
             code_vec=vecs["code"],

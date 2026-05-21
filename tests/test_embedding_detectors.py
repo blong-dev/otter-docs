@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import pytest
+
 from otter_docs import Repo
 from otter_docs.backends import SqliteBackend
 from otter_docs.clients import FakeLLMClient
@@ -153,6 +155,129 @@ def test_semantic_equivalence_threshold_configurable():
     assert det.code_threshold == 0.5
 
 
+def _collide_all_embedder(dim: int = 8):
+    """Embedder that maps every text to the same axis-1 unit vector.
+
+    Forces every pair to look maximally similar — useful for
+    exercising shape classification without juggling per-text vectors.
+    """
+    vec = _normalize([0.0] + [1.0] + [0.0] * (dim - 2))
+
+    class _CollideEmbedder:
+        @property
+        def dim(self) -> int:
+            return dim
+
+        def embed(self, texts):
+            return [list(vec) for _ in texts]
+
+    return _CollideEmbedder()
+
+
+def test_semantic_equivalence_lifecycle_hook_emits_informational(tmp_path: Path):
+    """Two `__init__` methods on different classes → shape='lifecycle_hook'.
+
+    Even when description + code vectors collide perfectly, the
+    Finding should land at LIFECYCLE_CONFIDENCE (0.05) — well below
+    any default subscriber threshold — and `evidence.shape` should be
+    'lifecycle_hook' so downstream readers can recognize it.
+    """
+    (tmp_path / "a.py").write_text(
+        "class Foo:\n"
+        "    def __init__(self, x):\n"
+        "        self.x = x\n\n"
+        "class Bar:\n"
+        "    def __init__(self, x):\n"
+        "        self.x = x\n"
+    )
+
+    with Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8)) as repo:
+        repo.scan()
+        repo.enrich(FakeLLMClient(), _collide_all_embedder())
+        findings = repo.findings(kinds={"redundancy.semantic_equivalence"})
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence["shape"] == "lifecycle_hook"
+        assert f.confidence == 0.05
+        assert f.evidence["function_names"] == ["__init__", "__init__"]
+        # Recommendation should not say "Consolidate"
+        assert "Consolidate" not in f.recommendation.summary
+        assert "lifecycle" in f.recommendation.summary.lower()
+
+
+def test_semantic_equivalence_sibling_methods_scales_confidence(tmp_path: Path):
+    """Two `process` methods on different classes (same basename, no
+    lifecycle-hook match) → shape='sibling_methods', confidence
+    scaled by SIBLING_CONFIDENCE_SCALE (0.7)."""
+    (tmp_path / "a.py").write_text(
+        "class Pipeline:\n"
+        "    def process(self, x):\n"
+        "        return x + 1\n\n"
+        "class Worker:\n"
+        "    def process(self, x):\n"
+        "        return x + 1\n"
+    )
+
+    with Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8)) as repo:
+        repo.scan()
+        repo.enrich(FakeLLMClient(), _collide_all_embedder())
+        findings = repo.findings(kinds={"redundancy.semantic_equivalence"})
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence["shape"] == "sibling_methods"
+        # description_similarity == 1.0 (collide), confidence = 1.0 * 0.7
+        assert f.confidence == pytest.approx(0.7, abs=1e-6)
+        assert "Consolidate" not in f.recommendation.summary
+        assert "sibling" in f.recommendation.summary.lower()
+
+
+def test_semantic_equivalence_skips_test_file_pairs(tmp_path: Path):
+    """Pairs where either side is a test file are filtered out — tests
+    are duplicative by design (parameterized cases, shared fixtures)."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text(
+        "def helper(): return 1\n"
+    )
+    (tmp_path / "lib.py").write_text(
+        "def helper(): return 1\n"
+    )
+
+    with Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8)) as repo:
+        repo.scan()
+        repo.enrich(FakeLLMClient(), _collide_all_embedder())
+        findings = repo.findings(kinds={"redundancy.semantic_equivalence"})
+        # Even with perfect description+code collision, the test-file
+        # filter drops the pair entirely.
+        assert findings == []
+
+
+def test_semantic_equivalence_default_threshold_is_0_95():
+    """Default description_threshold raised from 0.92 to 0.95 (2026-05-21
+    calibration) — anything below was producing too many false positives
+    from generic LLM descriptions."""
+    det = SemanticEquivalenceDetector()
+    assert det.description_threshold == 0.95
+
+
+def test_semantic_equivalence_likely_duplicate_shape(tmp_path: Path):
+    """Different-named module-level functions → shape='likely_duplicate'
+    with the original Consolidate-style recommendation."""
+    (tmp_path / "a.py").write_text(
+        "def alpha(x):\n    return x + 1\n\n"
+        "def beta(x):\n    return x + 1\n"
+    )
+
+    with Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8)) as repo:
+        repo.scan()
+        repo.enrich(FakeLLMClient(), _collide_all_embedder())
+        findings = repo.findings(kinds={"redundancy.semantic_equivalence"})
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence["shape"] == "likely_duplicate"
+        assert f.confidence == pytest.approx(1.0, abs=1e-6)
+        assert "Consolidate" in f.recommendation.summary
+
+
 # ── description divergence ─────────────────────────────────────────────
 
 
@@ -190,6 +315,50 @@ def test_description_divergence_flags_misaligned_function(tmp_path: Path):
 def test_description_divergence_threshold_configurable():
     det = DescriptionDivergenceDetector(threshold=0.7)
     assert det.threshold == 0.7
+
+
+def test_description_divergence_is_llm_direct_tier():
+    """Tier moved to llm_direct (2026-05-21) so it doesn't fire on a
+    default findings() call — cosine-only signal is too noisy without
+    an LLM judge."""
+    det = DescriptionDivergenceDetector()
+    assert det.cost_tier == "llm_direct"
+
+
+def test_description_divergence_excluded_from_default_findings(tmp_path: Path):
+    """A default (unfiltered) findings() call must NOT include
+    description.divergence, but an explicit kinds= request still runs it."""
+    (tmp_path / "a.py").write_text(
+        "def aligned(): return 1\n\n"
+        "def diverged(): return 1\n"
+    )
+
+    class _DivergenceEmbedder:
+        @property
+        def dim(self) -> int:
+            return 8
+        def embed(self, texts):
+            out: list[list[float]] = []
+            for t in texts:
+                if "diverged" in t and ("Source:" not in t):
+                    v = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                else:
+                    v = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                out.append(v)
+            return out
+
+    with Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8)) as repo:
+        repo.scan()
+        repo.enrich(FakeLLMClient(), _DivergenceEmbedder())
+        # Default call: no description.divergence findings.
+        default = repo.findings()
+        assert not any(f.kind == "description.divergence" for f in default)
+        # Explicit kinds: it runs.
+        explicit = repo.findings(kinds={"description.divergence"})
+        assert any(f.kind == "description.divergence" for f in explicit)
+        # Explicit llm_direct tier: also runs.
+        tiered = repo.findings(cost_tiers={"llm_direct"})
+        assert any(f.kind == "description.divergence" for f in tiered)
 
 
 def test_description_divergence_skips_when_no_vectors(tmp_path: Path):

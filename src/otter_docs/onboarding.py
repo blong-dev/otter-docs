@@ -240,6 +240,9 @@ def onboard_repo(entry: RepoEntry, models: ModelConfig) -> OnboardResult:
 
             rep = repo.resolve()
             result.resolved_edges = sum(r.edges_emitted for r in rep.values())
+            for r in rep.values():
+                for w in r.warnings:
+                    result.degradations.append(w)
 
             if entry.enrich:
                 ok, note = _try_enrich(repo, models)

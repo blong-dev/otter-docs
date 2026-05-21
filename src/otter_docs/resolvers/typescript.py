@@ -31,8 +31,14 @@ from tree_sitter import Node, Parser
 
 from otter_docs.backends.base import GraphBackend
 from otter_docs.models import Edge, Language
-from otter_docs.resolvers.base import register
+from otter_docs.resolvers.base import declare_install_hint, register
 from otter_docs.resolvers.lsp import LspClient, LspError
+
+INSTALL_HINT = (
+    "npm install -g typescript typescript-language-server  "
+    "# typescript-language-server on PATH"
+)
+declare_install_hint(Language.TYPESCRIPT, INSTALL_HINT)
 
 if TYPE_CHECKING:
     pass

@@ -13,7 +13,7 @@ from otter_docs.clients import (
 from otter_docs.describe import Describer, Description, SqliteDescriptionCache
 from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
-from otter_docs.llm_direct import Review
+from otter_docs.llm_direct import RedundancyVerdict, Review
 from otter_docs.models import (
     ClassRecord,
     Edge,
@@ -36,7 +36,7 @@ from otter_docs.onboarding import (
 from otter_docs.repo import Repo, ScanReport
 from otter_docs.resolvers.base import ResolveReport
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0rc2"
 
 __all__ = [
     "ClassRecord",
@@ -63,6 +63,7 @@ __all__ = [
     "OllamaEmbeddingClient",
     "OllamaLLMClient",
     "Recommendation",
+    "RedundancyVerdict",
     "Repo",
     "RepoEntry",
     "ResolveReport",

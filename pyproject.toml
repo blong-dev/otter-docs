@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "otter-docs"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Polyglot codebase inspection library for agent-driven development"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,8 @@ dependencies = [
     "tree-sitter-python>=0.23",
     "tree-sitter-go>=0.23",
     "tree-sitter-typescript>=0.23",
+    "tree-sitter-rust>=0.23",
+    "tree-sitter-java>=0.23",
 ]
 
 [project.optional-dependencies]

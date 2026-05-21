@@ -15,7 +15,12 @@ import pytest
 from otter_docs import Repo
 from otter_docs.backends import SqliteBackend
 from otter_docs.findings import Finding
-from otter_docs.llm_direct import Review, _extract_diff, _parse_review
+from otter_docs.llm_direct import (
+    Review,
+    _extract_diff,
+    _parse_redundancy_verdict,
+    _parse_review,
+)
 from otter_docs.models import Location
 
 
@@ -129,6 +134,138 @@ def test_propose_consolidation_rejects_non_redundancy_finding(tmp_path: Path):
     with pytest.raises(ValueError, match="redundancy"):
         repo.propose_consolidation(finding, _ScriptedLLM([]))
     repo.close()
+
+
+# ── confirm_redundancy ────────────────────────────────────────────────
+
+
+def _redundancy_finding(repo, a, b):
+    return Finding(
+        kind="redundancy.semantic_equivalence",
+        confidence=0.98,
+        locations=[
+            Location(repo=repo.name, path="a.py", line=a.line, end_line=a.end_line, guid=a.guid),
+            Location(repo=repo.name, path="a.py", line=b.line, end_line=b.end_line, guid=b.guid),
+        ],
+        evidence={"function_names": [a.name, b.name], "shape": "likely_duplicate"},
+    )
+
+
+def test_confirm_redundancy_duplicate_verdict(tmp_path: Path):
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        '{"is_duplicate": true, "confidence": 0.92, '
+        '"kind": "duplicate", "reason": "Same x+1 logic, equivalent shape."}'
+    )])
+    v = repo.confirm_redundancy(_redundancy_finding(repo, a, b), llm)
+    assert v.is_duplicate is True
+    assert v.kind == "duplicate"
+    assert v.confidence == 0.92
+    assert "x+1" in v.reason
+    repo.close()
+
+
+def test_confirm_redundancy_shared_pattern_is_not_duplicate(tmp_path: Path):
+    """LLM flags as shared_pattern → is_duplicate False even if model
+    sloppily set the boolean to true."""
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        '{"is_duplicate": true, "confidence": 0.8, '
+        '"kind": "shared_pattern", "reason": "Both are per-adapter _get helpers."}'
+    )])
+    v = repo.confirm_redundancy(_redundancy_finding(repo, a, b), llm)
+    assert v.kind == "shared_pattern"
+    assert v.is_duplicate is False  # forced false because kind != "duplicate"
+    repo.close()
+
+
+def test_confirm_redundancy_unparseable_falls_back(tmp_path: Path):
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        "the model went off-script and wrote prose")])
+    v = repo.confirm_redundancy(_redundancy_finding(repo, a, b), llm)
+    assert v.is_duplicate is False
+    assert v.kind == "coincidental"
+    assert v.confidence == 0.0
+    assert "unparseable" in v.reason
+    repo.close()
+
+
+def test_confirm_redundancy_rejects_non_redundancy_finding(tmp_path: Path):
+    repo, _, _ = _setup_redundancy_repo(tmp_path)
+    finding = Finding(
+        kind="dead_code", confidence=0.5,
+        locations=[Location(repo=repo.name, path="a.py", line=1, end_line=2)],
+    )
+    with pytest.raises(ValueError, match="redundancy"):
+        repo.confirm_redundancy(finding, _ScriptedLLM([]))
+    repo.close()
+
+
+def test_confirm_redundancy_uses_repo_default_cache(tmp_path: Path):
+    """Second call on an unchanged pair must not invoke the LLM —
+    the verdict comes from the cache materialized by the first call."""
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        '{"is_duplicate": true, "confidence": 0.9, '
+        '"kind": "duplicate", "reason": "same body"}'
+    )])
+    finding = _redundancy_finding(repo, a, b)
+
+    v1 = repo.confirm_redundancy(finding, llm)
+    assert v1.is_duplicate is True
+    assert len(llm.calls) == 1
+
+    v2 = repo.confirm_redundancy(finding, llm)
+    assert v2 == v1
+    # cache hit — no new LLM call
+    assert len(llm.calls) == 1
+    repo.close()
+
+
+def test_confirm_redundancy_cache_keyed_on_model(tmp_path: Path):
+    """Same pair + different LLM model = cache miss (verdicts are
+    model-specific; small Qwen and big Claude shouldn't share cache)."""
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    finding = _redundancy_finding(repo, a, b)
+
+    class _NamedLLM(_ScriptedLLM):
+        def __init__(self, model, rules):
+            super().__init__(rules)
+            self.model = model
+
+    llm_a = _NamedLLM("qwen3.5-9b", [
+        ("Two functions in the same codebase were flagged",
+         '{"is_duplicate": true, "confidence": 0.9, "kind": "duplicate", "reason": "a"}'),
+    ])
+    llm_b = _NamedLLM("claude-opus-4-7", [
+        ("Two functions in the same codebase were flagged",
+         '{"is_duplicate": true, "confidence": 0.97, "kind": "duplicate", "reason": "b"}'),
+    ])
+
+    v1 = repo.confirm_redundancy(finding, llm_a)
+    v2 = repo.confirm_redundancy(finding, llm_b)
+    assert v1.reason == "a"
+    assert v2.reason == "b"
+    # Same pair, but model id differs → both LLMs invoked.
+    assert len(llm_a.calls) == 1
+    assert len(llm_b.calls) == 1
+    # And re-running each picks up its own cached verdict
+    v1_again = repo.confirm_redundancy(finding, llm_a)
+    assert v1_again.reason == "a"
+    assert len(llm_a.calls) == 1
+    repo.close()
+
+
+def test_parse_redundancy_verdict_clamps_confidence():
+    v = _parse_redundancy_verdict(
+        '{"is_duplicate": true, "confidence": 1.5, "kind": "duplicate", "reason": "x"}'
+    )
+    assert v.confidence == 1.0
+    v2 = _parse_redundancy_verdict(
+        '{"is_duplicate": true, "confidence": -0.2, "kind": "duplicate", "reason": "x"}'
+    )
+    assert v2.confidence == 0.0
 
 
 # ── review_change ─────────────────────────────────────────────────────

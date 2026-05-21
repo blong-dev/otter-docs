@@ -22,6 +22,8 @@ class Language(str, Enum):
     GO = "go"
     TYPESCRIPT = "typescript"
     JAVASCRIPT = "javascript"
+    RUST = "rust"
+    JAVA = "java"
     UNKNOWN = "unknown"
 
 
@@ -76,6 +78,11 @@ class FunctionRecord(BaseModel):
 
     Methods carry their containing class via a MEMBER_OF edge separately;
     they are not embedded inside the class record.
+
+    `cyclomatic_complexity` is the McCabe metric (1 + decision-point
+    count) computed at parse time. Only the Python parser populates it
+    today; other languages leave it None. Detectors that want a
+    branchiness signal (large_function) can use it when available.
     """
 
     repo: str
@@ -89,6 +96,7 @@ class FunctionRecord(BaseModel):
     returns: str = ""
     is_async: bool = False
     tags: list[str] = Field(default_factory=list)
+    cyclomatic_complexity: int | None = None
     updated_at: datetime | None = None
     description_vec: list[float] | None = None
     code_vec: list[float] | None = None

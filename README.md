@@ -1,23 +1,86 @@
 # otter-docs
 
+[![PyPI version](https://img.shields.io/pypi/v/otter-docs.svg)](https://pypi.org/project/otter-docs/)
+[![Python versions](https://img.shields.io/pypi/pyversions/otter-docs.svg)](https://pypi.org/project/otter-docs/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A polyglot codebase inspection library for agent-driven development.
 
-> **Status (2026-05-15): v0.1 in active development on `main`. Library
-> is functional end-to-end; not yet released to PyPI.**
+> **Status (2026-05-20):** `0.1.0rc2`. Library is functional end-to-end
+> across Python / Go / TypeScript / TSX / JS / Rust / Java. 274 tests
+> pass on the default install. PyPI release imminent.
+
+## Quickstart
+
+```bash
+pip install otter-docs
+```
+
+```bash
+otter-docs scan .            # tree-sitter AST → graph
+otter-docs find .            # static findings (dead_code, large_function, …)
+otter-docs render .          # write SYSTEM.md with marker-based injection
+otter-docs install-hooks .   # pre-commit + pre-push
+```
+
+Or from Python:
+
+```python
+from otter_docs import Repo
+
+with Repo(".") as r:
+    r.scan()
+    r.resolve()
+    for f in r.findings():
+        print(f.kind, f.locations[0].path)
+```
 
 ## What it is
 
-otter-docs builds a queryable model of a codebase — modules,
-functions, classes, calls, imports — augmented with LLM-generated
-description embeddings, and emits structured **findings** (redundancy,
-drift, dead code, architectural smells) that an agent can act on. Each
-finding can carry a recommendation with rationale, and the LLM-direct
-tier can produce an apply-ready unified diff.
+otter-docs builds a queryable model of a codebase — modules, functions,
+classes, calls, imports — augmented with LLM-generated description
+embeddings, and emits structured **findings** (redundancy, drift, dead
+code, architectural smells) that an agent can act on. Each finding can
+carry a recommendation with rationale, and the LLM-direct tier can
+produce an apply-ready unified diff.
 
 The library is designed for agents to consume, not humans to read. The
-human operates the agent. otter-docs never applies changes itself —
-it emits typed findings and proposed diffs; the harness owns
+human operates the agent. otter-docs never applies changes itself — it
+emits typed findings and proposed diffs; the harness owns
 implementation.
+
+## Install matrix
+
+The base wheel is fully usable on its own (scan + static findings +
+render + hooks + GUID assignment + SQLite backend). The extras unlock
+specific layers:
+
+| install | unlocks | external tooling |
+|---|---|---|
+| `pip install otter-docs` | scan, static findings, render, install-hooks, assign-guids | — |
+| `pip install otter-docs[python-resolver]` | cross-file resolve for Python | — (pulls `jedi`) |
+| `pip install otter-docs[neo4j]` | Neo4j backend | a running Neo4j |
+| `pip install otter-docs[mcp]` | `otter-docs serve` (MCP server) | — |
+| `pip install otter-docs[all-resolvers]` | every available resolver extra | — |
+| `pip install otter-docs[dev]` | tests + ruff + every optional dep | — |
+
+Go and TypeScript resolvers don't have pip extras — they require their
+language servers on PATH:
+
+```bash
+go install golang.org/x/tools/gopls@latest                    # Go
+npm install -g typescript typescript-language-server          # TS / TSX
+```
+
+If a language's resolver isn't registered (extra not installed, or LSP
+not on PATH) but otter-docs scans source files in that language, you
+get a loud warning naming the install command. Silence per-language
+with `OTTER_RESOLVER_QUIET=go` (etc).
+
+For the **enrich** tier (LLM descriptions + three-vector embeddings),
+bring any OpenAI-compatible LLM endpoint and embedder endpoint
+(llama.cpp / vLLM / Ollama / OpenAI). See the [pipeline](#pipeline)
+section below.
 
 ## Pipeline
 
@@ -50,113 +113,94 @@ otter-docs render .          # write/update SYSTEM.md
 otter-docs init .            # bootstrap SYSTEM.md with markers
 otter-docs install-hooks .   # git pre-commit/pre-push
 otter-docs serve .           # MCP server (needs the [mcp] extra)
+otter-docs assign-guids .    # mint `# guid:` / `// guid:` markers
+otter-docs onboard --manifest repos.toml   # multi-repo fleet
 ```
 
 ## What's implemented
 
-- **Polyglot AST** via tree-sitter — Python, Go, TypeScript/TSX, JS.
+- **Polyglot AST** via tree-sitter — Python, Go, TypeScript/TSX, JS,
+  Rust, Java.
 - **Cross-file resolution** via mature per-language solvers: jedi
   (Python, validated), `typescript-language-server` (TS, validated),
-  `gopls` (Go, validated against gopls v0.21.1 — resolves
-  cross-file calls and receiver methods).
-  Each registers only when its tooling is present; a polyglot repo
-  with partial tooling still gets partial coverage.
+  `gopls` (Go, validated against gopls v0.21.1 — resolves cross-file
+  calls and receiver methods). Each registers only when its tooling is
+  present; a polyglot repo with partial tooling still gets partial
+  coverage **and a loud warning naming the missing piece**.
 - **Three-vector indexing** per symbol: an LLM-generated description,
   the code slice, and the docstring — each embedded separately.
+- **Content-addressed caches** (`describe` and `embed`) — re-running on
+  unchanged code is free.
 - **Detectors**:
-  - static tier — `dead_code`, `large_function`, `empty_module`
-  - embedding tier — `redundancy.semantic_equivalence`,
-    `description.divergence`
+  - static tier — `dead_code` (visibility-ranked: `private` /
+    `public` / `public_export` multiplicatively scale the confidence
+    so downstream can rank within a single detector run),
+    `large_function` (line-count *or* McCabe cyclomatic complexity
+    — Python parser populates the latter), `empty_module`
+    (`__init__.py` package-marker case auto-downgraded to
+    informational)
+  - embedding tier — `redundancy.semantic_equivalence` (emits an
+    `evidence.shape` of `likely_duplicate` / `sibling_methods` /
+    `lifecycle_hook` so downstream can treat dunder-method pairs and
+    sibling methods on different classes differently from real
+    duplicates; test-file pairs filtered automatically)
+  - `llm_direct` tier (opt-in; excluded from a default `findings()`
+    call) — `description.divergence`. See Known Limitations.
 - **LLM-direct tier** — `propose_consolidation` (generates a unified
-  diff), `review_change` (structured review of a diff), `describe`.
+  diff), `review_change` (structured review of a diff), `describe`,
+  `confirm_redundancy` (reads both function bodies and classifies a
+  redundancy finding as `duplicate` / `sibling` / `shared_pattern` /
+  `coincidental` — high-precision second pass over the embedding
+  detector's high-recall output; content-addressed verdict cache in
+  `graph.db` makes steady-state re-runs ~free).
+- **Auto-docs infrastructure layer** — pure-filesystem detectors that
+  pick up the surfaces every codebase carries: dependency manifests
+  (pyproject / package.json / go.mod / Cargo.toml / Gemfile /
+  requirements.txt — single-package and monorepo with subtree
+  discovery), license (best-effort SPDX), README (summary +
+  H2 outline; subtree READMEs in monorepos when the directory has a
+  manifest), test layout (dir + file count + inferred runner:
+  pytest / jest / vitest / go test / rspec), top-level source map
+  with annotations. Each renders into its own marker section of
+  OTTER.md; sections without a surface in this repo emit a quiet
+  "not detected" placeholder rather than disappearing.
 - **Agent harness** — `schemas`, `prompts`, `tools` (MCP-spec
   emittable), and a `Harness` that grades a codebase.
-- **Renderers** — `system_overview`, `findings_summary`,
-  `redundancy_report`, `dependency_graph`, `architecture_smells`,
-  with marker-based injection that preserves human prose across
-  reruns.
+- **Renderers** — code-graph sections (`system_overview`,
+  `findings_summary`, `redundancy_report`, `dependency_graph`,
+  `architecture_smells`) plus the infrastructure-layer sections
+  above (`readme`, `dependencies`, `license`, `source_layout`,
+  `tests`). All use the same marker-based injection that preserves
+  human prose across reruns.
 - **Backends** — SQLite + sqlite-vec (default, zero-config); Neo4j
   adapter (opt-in, validated against a live instance).
-- **Clients** — Ollama-native and OpenAI-compatible (llama.cpp /
-  vLLM / OpenAI) LLM + embedding adapters, plus deterministic fakes.
+- **Clients** — Ollama-native and OpenAI-compatible (llama.cpp / vLLM /
+  OpenAI) LLM + embedding adapters, plus deterministic fakes.
+- **GUID assignment** — `assign-guids` mints `# guid:<uuid>` /
+  `// guid:<uuid>` inline markers as a cross-tool primary key across
+  every supported language. Idempotent, diff-only when wired into git
+  hooks.
+- **Streaming findings** — `repo.findings_stream()` yields Findings as
+  detectors produce them, so consumers can publish each Finding to a
+  message bus the moment it's available rather than waiting for the
+  full list. Filters (`kinds`, `cost_tiers`) apply just like
+  `findings()`.
+- **Multi-repo onboarding** — declarative `repos.toml` manifest,
+  idempotent `otter-docs onboard`, flock-guarded against concurrent
+  writers, `.otter-docs/status.json` heartbeat per repo.
 
-## Evaluation — honest numbers
+## Evaluation
 
-The `redundancy.semantic_equivalence` detector is the wedge: it
-should catch "100 ways to skin a cat" duplication that source-trained
-clone models miss, because it ranks on the *description* vector (the
-LLM's prose abstracts away surface differences).
+`redundancy.semantic_equivalence` ranks on the **description vector**
+(an LLM-generated prose summary) so it catches semantic clones that
+source-trained models miss. Headline number on CodeNet-Python800 (the
+permissively-licensed Type-4 benchmark we vetted): **F1 0.854** on the
+type-4-enforced set, with a +0.030 contamination delta vs. the
+unfiltered baseline — i.e. the method captures semantic equivalence,
+not surface similarity.
 
-**Bundled smoke set (12 hand-labeled pairs, real embedder
-`nomic-embed-text`):** F1 = 1.00 at thresholds 0.725–0.95, including
-the Type-4 cases (iterative vs recursive factorial; two structurally
-different palindrome checks; two linked-list reversals). This
-validates the *mechanism* — description-vector cosine cleanly
-separates semantic clones from look-alikes.
-
-**What this is NOT:** 12 hand-picked pairs with idealized
-(hand-written, identical-for-clones) descriptions does not establish
-production-scale precision. The bundled number proves the mechanism;
-it is not a benchmark figure.
-
-**Scale benchmark — IBM Project CodeNet (Python800).** We chose
-CodeNet over GPTCloneBench deliberately: GPTCloneBench's data is
-CC BY-NC-ND (a NonCommercial + NoDerivatives gray area for a
-commercial product), and it's mostly Java/C/C# — only its Python
-slice overlaps our parsers. CodeNet is **CDLA-Permissive-2.0**
-(commercial use + derivatives explicitly OK), Python-native, and
-type-4 by construction: every accepted submission to a problem is a
-semantically-equivalent solution; different problems are non-clones.
-
-The sampler is the part that has to be honest, not hand-wavy. A
-naive same-problem→clone sampler is meaningless because same-problem
-submissions are full of copy-paste. `otter_docs.eval_codenet`
-enforces:
-- **type-4 positives only** — a same-problem pair is kept only if
-  token-set Jaccard is below a threshold AND its AST node-type
-  histogram is structurally divergent. Copy-paste / renamed-var
-  pairs are excluded. An unfiltered same-problem set is scored in
-  parallel so the report shows the *contamination delta* (easy vs
-  hard number) explicitly.
-- **two negative strata** — `hard` (different-problem pairs that are
-  surface-similar, the case surface-trained models fail) and
-  `random`, reported separately.
-- **no description leakage** — each snippet is described by the
-  shipping describer from its *code only*, never the problem id.
-- frozen seed + config, printed with the number → reproducible by
-  construction.
-
-Reproduce it yourself: `examples/codenet_eval.py` (download
-instructions in the file header). Not a CI step — CI has no dataset,
-LLM, or embedder; CI runs the harness on the bundled set with a
-fake embedder to guard the precision/recall/threshold math.
-
-**Result (seed 1729, 200 type-4 positives + 100 hard + 100 random
-negatives, 72 distinct problems, real `nomic-embed-text` over
-LLM-generated descriptions):**
-
-| set | threshold | precision | recall | F1 |
-|---|---|---|---|---|
-| **type-4 enforced (headline)** | 0.775 | 0.82 | 0.89 | **0.854** |
-| unfiltered same-problem (baseline) | 0.80 | 0.91 | 0.86 | 0.884 |
-
-The number that matters is not 0.854 in isolation — it's the
-**+0.030 contamination delta**: the structurally-hard type-4 set
-scores almost as high as the copy-paste-contaminated baseline. The
-method is *not* riding surface similarity; it's capturing semantic
-equivalence on genuinely-different-structure code. That small gap is
-the evidence the description-vector thesis holds.
-
-Calibration: 0.85 sits above the C4 ≈ 0.70 cross-language SOTA — but
-C4's figure is on *GPTCloneBench* and this is on *CodeNet-Python800*
-with a 400-pair sample, so this is **directional, not a strict
-"beats C4" claim**. Different dataset, different scale.
-Reproduce with `examples/codenet_eval.py` (config above is the
-frozen `SamplerConfig`; same seed + models → same number).
-
-CodeNet: <https://github.com/IBM/Project_CodeNet> ·
-CDLA-Permissive-2.0: <https://cdla.dev/permissive-2-0/> ·
-Why BigCloneBench is corrupted: <https://arxiv.org/html/2505.04311v1>.
+Full methodology, sampler design, and the reproducibility recipe are in
+[`docs/evaluation.md`](docs/evaluation.md).
 
 ## Known limitations
 
@@ -165,10 +209,21 @@ Why BigCloneBench is corrupted: <https://arxiv.org/html/2505.04311v1>.
   reached via dynamic dispatch (`self.x.method()`) still escape it.
   Findings carry `confidence` and `edge_confidence` for exactly this
   reason — weight by them.
-- All three resolvers are validated against their live language
-  servers (jedi, typescript-language-server, gopls v0.21.1).
-- `risk.behavior_propagation` (call-graph-aware risk) is deferred
-  past v0.1.
+- All three resolvers are validated against their live language servers
+  (jedi, typescript-language-server, gopls v0.21.1).
+- `description.divergence` is **disabled by default** (cost_tier
+  `llm_direct`, excluded from an unfiltered `findings()` call). Cosine
+  distance between a function's description vector and code vector
+  conflates real docstring staleness with "terse code + verbose
+  description" — a one-liner with a perfectly accurate docstring
+  scores the same as one with a stale docstring (empirically ~0.53 on
+  nomic-embed-text). The distance signal alone isn't trustworthy. The
+  planned fix (`confirm_description`, v0.2) is an LLM judge that reads
+  both and rules accurate / partial / stale / wrong — same shape as
+  `confirm_redundancy`. Request the raw signal explicitly with
+  `findings(kinds={"description.divergence"})` if you want it anyway.
+- `risk.behavior_propagation` (call-graph-aware risk) is deferred past
+  v0.1.
 - Embedding quality is the embedder's; we don't fine-tune.
 
 ## License
@@ -179,3 +234,5 @@ MIT.
 
 - Repository: <https://github.com/blong-dev/otter-docs>
 - Issues: <https://github.com/blong-dev/otter-docs/issues>
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
+- Evaluation: [`docs/evaluation.md`](docs/evaluation.md)

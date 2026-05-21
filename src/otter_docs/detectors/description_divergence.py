@@ -9,12 +9,21 @@ is true:
   (b) The function does multiple things and the description only
       captures one of them.
 
-Both are worth surfacing. We don't claim to know which one without an
-LLM-direct follow-up (that's Phase 7). Output: a Finding with both
-vectors' similarity in evidence and a recommendation to read the
-function and either rewrite the docstring or split the function.
+**Known limitation (2026-05-21): cosine similarity alone is too noisy
+to ship enabled-by-default.** Empirically (v3, 6423 enriched
+functions on nomic-embed-text) the signal conflates real divergence
+with "terse code + verbose description": a Go one-liner with a
+*perfectly accurate* docstring scores the same ~0.53 as one with a
+stale docstring. Same number, opposite meaning, undetectable by
+distance. The right fix is an LLM judge (planned `confirm_description`,
+v0.2) that reads both and rules accurate / partial / stale / wrong —
+the same shape as `confirm_redundancy`.
 
-Cost-tier: embedding. Free at query time once vectors exist.
+Until then this detector is **cost_tier=`llm_direct`**, so it does NOT
+run on a default `findings()` call (only the static + embedding tiers
+do). Request it explicitly with `findings(kinds={"description.
+divergence"})` or `cost_tiers={"llm_direct"}` if you want the raw
+distance signal anyway.
 """
 
 from __future__ import annotations
@@ -34,7 +43,10 @@ DEFAULT_THRESHOLD = 0.4
 
 class DescriptionDivergenceDetector:
     kind = "description.divergence"
-    cost_tier = "embedding"
+    # llm_direct → excluded from the default findings() tier set so the
+    # noisy raw-distance signal doesn't surface until the LLM-judge
+    # version lands. See module docstring.
+    cost_tier = "llm_direct"
 
     def __init__(self, *, threshold: float = DEFAULT_THRESHOLD) -> None:
         self.threshold = threshold

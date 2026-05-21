@@ -17,9 +17,15 @@ in a later phase (see spec).
 
 from __future__ import annotations
 
-from otter_docs.detectors.base import Detector, register, registry, run_all
+from otter_docs.detectors.base import (
+    Detector,
+    register,
+    registry,
+    run_all,
+    run_all_stream,
+)
 
-__all__ = ["Detector", "register", "registry", "run_all"]
+__all__ = ["Detector", "register", "registry", "run_all", "run_all_stream"]
 
 
 def _bootstrap() -> None:

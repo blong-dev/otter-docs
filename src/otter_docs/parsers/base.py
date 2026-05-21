@@ -75,7 +75,9 @@ def _bootstrap() -> None:
     # is missing the user gets a clear error only when they reach the
     # parser they're trying to use.
     from otter_docs.parsers import go as _go  # noqa: F401
+    from otter_docs.parsers import java as _java  # noqa: F401
     from otter_docs.parsers import python as _py  # noqa: F401
+    from otter_docs.parsers import rust as _rust  # noqa: F401
     from otter_docs.parsers import typescript as _ts  # noqa: F401
 
 

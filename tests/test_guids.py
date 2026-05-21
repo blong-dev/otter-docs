@@ -265,9 +265,63 @@ def test_assign_typescript_arrow_marker_on_const_line():
 
 def test_assign_unknown_extension_is_noop():
     src = b"whatever\n"
-    new, n = assign_missing_markers(src, suffix=".rs")
+    new, n = assign_missing_markers(src, suffix=".xyz")
     assert n == 0
     assert new == src
+
+
+def test_assign_rust_top_level_fn_and_impl_methods():
+    src = (
+        b"fn hello() -> i32 { 1 }\n"
+        b"\n"
+        b"struct Calc;\n"
+        b"\n"
+        b"impl Calc {\n"
+        b"    fn new() -> Self { Calc }\n"
+        b"    fn add(&self, x: i32) -> i32 { x }\n"
+        b"}\n"
+    )
+    new, n = assign_missing_markers(src, suffix=".rs")
+    # Markers expected on: hello, struct Calc, impl.new, impl.add — 4 total.
+    assert n == 4
+    text = new.decode()
+    assert text.count("// guid:") == 4
+
+
+def test_assign_rust_idempotent():
+    src = b"fn hello() -> i32 { 1 }\n"
+    once, n1 = assign_missing_markers(src, suffix=".rs")
+    twice, n2 = assign_missing_markers(once, suffix=".rs")
+    assert n1 == 1
+    assert n2 == 0
+    assert twice == once
+
+
+def test_assign_java_class_with_methods_and_constructor():
+    src = (
+        b"public class Calc {\n"
+        b"    public Calc() {}\n"
+        b"    public int add(int x) { return x; }\n"
+        b"}\n"
+    )
+    new, n = assign_missing_markers(src, suffix=".java")
+    # Class + constructor + method = 3 markers.
+    assert n == 3
+    text = new.decode()
+    assert text.count("// guid:") == 3
+
+
+def test_assign_java_idempotent():
+    src = (
+        b"public class A {\n"
+        b"    void m() {}\n"
+        b"}\n"
+    )
+    once, n1 = assign_missing_markers(src, suffix=".java")
+    twice, n2 = assign_missing_markers(once, suffix=".java")
+    assert n1 == 2  # class + method (on distinct lines)
+    assert n2 == 0
+    assert twice == once
 
 
 def test_assign_round_trip_parser_uses_assigned_guid():

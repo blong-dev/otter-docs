@@ -48,6 +48,41 @@ class Review(BaseModel):
     blockers: list[str] = Field(default_factory=list)
 
 
+RedundancyKind = Literal["duplicate", "sibling", "shared_pattern", "coincidental"]
+
+
+class RedundancyVerdict(BaseModel):
+    """LLM judgement on whether a pair of functions is really redundant.
+
+    Returned by `confirm_redundancy`. The embedding-tier
+    semantic_equivalence detector is recall-oriented: it surfaces
+    candidate pairs from description-vector similarity, and many of
+    those turn out to be siblings, shared patterns, or just generic
+    helpers with similar prose. This verdict reads both bodies and
+    classifies the pair into one of four shapes:
+
+    - duplicate         same intent, same logic — consolidate
+    - sibling           parallel methods on different classes that
+                        share shape but carry distinct contracts
+    - shared_pattern    intentional repetition of a small idiom
+                        (HTTP `_get` helpers per adapter, decorator
+                        boilerplate, etc.) — leave alone
+    - coincidental      look similar due to small size or generic
+                        descriptions, not actually redundant
+
+    `is_duplicate` is the binary gate publishers use: True only when
+    `kind == "duplicate"`. `confidence` is the LLM's certainty in
+    [0, 1]; consumers may apply their own floor.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    is_duplicate: bool
+    confidence: float
+    kind: RedundancyKind
+    reason: str
+
+
 # ── prompts (kept in code for now, not externalized) ────────────────────
 
 
@@ -83,6 +118,56 @@ Rules:
   - If you can't safely produce a consolidation (different signatures,
     different side effects, or you're not confident), output an empty
     string — nothing else.
+"""
+
+
+_CONFIRM_REDUNDANCY_PROMPT = """\
+Two functions in the same codebase were flagged as semantically
+equivalent by a description-vector heuristic. Read both and judge
+whether they're really redundant.
+
+Function A:
+  path: {a_path}
+  name: {a_name}
+
+```{language}
+{a_source}
+```
+
+Function B:
+  path: {b_path}
+  name: {b_name}
+
+```{language}
+{b_source}
+```
+
+Pick exactly one label:
+  - "duplicate"        — same intent, same logic. Consolidating one
+                         into the other would leave the codebase
+                         strictly better. (signatures may differ
+                         slightly; what matters is the *behavior*.)
+  - "sibling"          — parallel methods on different classes (or
+                         parallel module-level helpers) that share
+                         shape but carry distinct contracts. A shared
+                         base / protocol might help; deletion would
+                         break callers that depend on the per-owner
+                         semantics.
+  - "shared_pattern"   — intentional repetition of a small idiom.
+                         Examples: per-adapter `_get` HTTP wrappers,
+                         per-module local `decorator` helpers,
+                         CRUD `_strip_html` per source. Leave alone.
+  - "coincidental"     — they look similar only because they're short
+                         or their descriptions overlap. Not actually
+                         redundant.
+
+Return a JSON object with these exact fields:
+  is_duplicate   true only when label is "duplicate"
+  confidence     your certainty in the label, 0.0 to 1.0
+  kind           the label string
+  reason         one sentence justifying the call
+
+Return JSON only — no commentary, no fenced block.
 """
 
 
@@ -216,6 +301,87 @@ def propose_consolidation(
     )
 
 
+def confirm_redundancy(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    llm: LLMClient,
+    llm_options: dict[str, Any] | None = None,
+    cache: Any = None,  # RedundancyCache; typed Any to avoid an import cycle
+) -> RedundancyVerdict:
+    """Ask the LLM to confirm whether a redundancy.* finding is really
+    a duplicate, or a sibling / shared pattern / coincidental match.
+
+    Designed for the publisher path: the embedding-tier detector is
+    high-recall, this is the high-precision second pass. Returns a
+    structured verdict the harness can gate on.
+
+    When `cache` is provided (an object implementing the
+    `RedundancyCache` Protocol from `verdictcache.py`), hits short-
+    circuit the LLM call and misses store the verdict on the way out.
+    Content-addressed by sha1(a_source + b_source) + llm model id —
+    unchanged pairs make zero round-trips on subsequent runs.
+
+    Raises ValueError on a non-redundancy.* finding or a finding
+    without two function locations.
+    """
+    if not finding.kind.startswith("redundancy."):
+        raise ValueError(
+            f"confirm_redundancy expects a redundancy.* finding, got {finding.kind!r}"
+        )
+    if len(finding.locations) < 2:
+        raise ValueError("redundancy finding must have at least two locations")
+
+    a_loc, b_loc = finding.locations[0], finding.locations[1]
+    a_fn = _fetch_function(graph, repo, a_loc.guid)
+    b_fn = _fetch_function(graph, repo, b_loc.guid)
+    if a_fn is None or b_fn is None:
+        return RedundancyVerdict(
+            is_duplicate=False,
+            confidence=0.0,
+            kind="coincidental",
+            reason="One or both functions could not be loaded from the graph.",
+        )
+
+    a_src = _read_slice(repo_root, a_fn)
+    b_src = _read_slice(repo_root, b_fn)
+    if a_src is None or b_src is None:
+        return RedundancyVerdict(
+            is_duplicate=False,
+            confidence=0.0,
+            kind="coincidental",
+            reason="Could not read source for one or both functions on disk.",
+        )
+
+    # Content-addressed cache lookup (when wired). Imported lazily so
+    # callers that don't pass a cache pay nothing.
+    cache_key: str | None = None
+    model_id: str | None = None
+    if cache is not None:
+        from otter_docs.verdictcache import llm_model_id, verdict_content_hash
+        cache_key = verdict_content_hash(a_src, b_src)
+        model_id = llm_model_id(llm)
+        hit = cache.get(cache_key, llm_model=model_id)
+        if hit is not None:
+            return hit
+
+    language = _infer_language(graph, repo, a_fn)
+    prompt = _CONFIRM_REDUNDANCY_PROMPT.format(
+        a_path=a_fn.module_path, a_name=a_fn.name, a_source=a_src,
+        b_path=b_fn.module_path, b_name=b_fn.name, b_source=b_src,
+        language=language,
+    )
+    raw = llm.complete(prompt, **(llm_options or {"temperature": 0.0, "num_predict": 300}))
+    verdict = _parse_redundancy_verdict(raw)
+
+    if cache is not None and cache_key is not None and model_id is not None:
+        cache.put(cache_key, llm_model=model_id, verdict=verdict)
+
+    return verdict
+
+
 def review_change(
     *,
     diff: str,
@@ -296,6 +462,54 @@ def _extract_diff(raw: str) -> str:
     if m:
         return m.group(1).strip()
     return raw.strip()
+
+
+_VALID_REDUNDANCY_KINDS = {"duplicate", "sibling", "shared_pattern", "coincidental"}
+
+
+def _parse_redundancy_verdict(raw: str) -> RedundancyVerdict:
+    """Parse the LLM's JSON verdict; fall back to a 'coincidental, low
+    confidence' shape on any parse failure — never raise just because
+    the model went off-script."""
+    text = raw.strip()
+    m = re.match(r"```(?:json)?\n([\s\S]*?)\n```", text)
+    if m:
+        text = m.group(1).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return RedundancyVerdict(
+            is_duplicate=False,
+            confidence=0.0,
+            kind="coincidental",
+            reason=f"unparseable LLM response: {text[:120]}",
+        )
+    if not isinstance(data, dict):
+        return RedundancyVerdict(
+            is_duplicate=False,
+            confidence=0.0,
+            kind="coincidental",
+            reason=f"non-object LLM response: {str(data)[:120]}",
+        )
+    kind = data.get("kind")
+    if kind not in _VALID_REDUNDANCY_KINDS:
+        kind = "coincidental"
+    is_dup = bool(data.get("is_duplicate", False))
+    # Re-derive `is_duplicate` from kind for consistency — the model
+    # sometimes sets one without the other.
+    if kind != "duplicate":
+        is_dup = False
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    return RedundancyVerdict(
+        is_duplicate=is_dup,
+        confidence=confidence,
+        kind=kind,  # type: ignore[arg-type]
+        reason=str(data.get("reason", "")),
+    )
 
 
 def _parse_review(raw: str) -> Review:

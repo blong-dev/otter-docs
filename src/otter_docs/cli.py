@@ -28,6 +28,18 @@ def _open_repo(path: str):
     return Repo(Path(path).resolve())
 
 
+def _print_resolve_warnings(reports) -> None:
+    """Print `warn:` lines for each resolver warning across all languages.
+
+    Silence per-language with OTTER_RESOLVER_QUIET=<lang>[,<lang>...].
+    Honored upstream in resolve_repo — by the time the warnings reach
+    here they've already been filtered.
+    """
+    for _lang, rep in reports.items():
+        for w in rep.warnings:
+            print(f"warn: {w}", file=sys.stderr)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     repo = _open_repo(args.path)
     try:
@@ -53,7 +65,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if not args.no_resolve:
             reports = repo.resolve()
             for lang, rep in reports.items():
-                print(f"resolve[{lang.value}]: {rep.edges_emitted} edges")
+                # Skip the synthesized missing-resolver entries — they have
+                # no edges and only carry a warning, printed below.
+                if not rep.warnings:
+                    print(f"resolve[{lang.value}]: {rep.edges_emitted} edges")
+            _print_resolve_warnings(reports)
         return 0
     finally:
         repo.close()
@@ -64,7 +80,7 @@ def cmd_find(args: argparse.Namespace) -> int:
     try:
         repo.scan()
         if not args.no_resolve:
-            repo.resolve()
+            _print_resolve_warnings(repo.resolve())
         kinds = set(args.kind) if args.kind else None
         findings = repo.findings(kinds=kinds)
         if args.json:
@@ -93,7 +109,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     try:
         repo.scan()
         if not args.no_resolve:
-            repo.resolve()
+            _print_resolve_warnings(repo.resolve())
         if args.section:
             print(repo.render(args.section))
             return 0

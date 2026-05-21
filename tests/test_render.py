@@ -27,13 +27,21 @@ def _repo(tmp_path: Path) -> Repo:
 # ── registry ────────────────────────────────────────────────────────────
 
 
-def test_all_five_renderers_registered():
+def test_all_renderers_registered():
+    """Code-graph renderers (5) + infra-layer renderers (5)."""
     assert set(registry()) == {
+        # code-graph (Phase 9)
         "system_overview",
         "findings_summary",
         "redundancy_report",
         "dependency_graph",
         "architecture_smells",
+        # infra layer (2026-05-21 auto-docs)
+        "readme",
+        "dependencies",
+        "license",
+        "source_layout",
+        "tests",
     }
 
 

@@ -193,12 +193,73 @@ def _ts_anchors(source: bytes, *, is_tsx: bool = False) -> list[int]:
     return out
 
 
+def _rust_anchors(source: bytes) -> list[int]:
+    """0-indexed def lines for Rust: top-level fn/struct/enum/trait/union,
+    and impl-block methods. Impl methods anchor on each `fn` inside the
+    impl body — not the impl itself — so each method gets its own marker."""
+    from otter_docs.parsers import rust as _rust
+    tree = _rust._PARSER.parse(source)
+    out: list[int] = []
+    for child in tree.root_node.named_children:
+        t = child.type
+        if t == "function_item":
+            out.append(child.start_point.row)
+        elif t in ("struct_item", "enum_item", "trait_item", "union_item"):
+            out.append(child.start_point.row)
+            if t == "trait_item":
+                body = child.child_by_field_name("body")
+                if body is not None:
+                    for m in body.named_children:
+                        if m.type in ("function_item", "function_signature_item"):
+                            out.append(m.start_point.row)
+        elif t == "impl_item":
+            body = child.child_by_field_name("body")
+            if body is None:
+                continue
+            for m in body.named_children:
+                if m.type == "function_item":
+                    out.append(m.start_point.row)
+    return out
+
+
+def _java_anchors(source: bytes) -> list[int]:
+    """0-indexed def lines for Java: every type declaration plus every
+    method/constructor inside (recurses through nested types)."""
+    from otter_docs.parsers import java as _java
+    tree = _java._PARSER.parse(source)
+    out: list[int] = []
+
+    type_nodes = (
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+    )
+
+    def walk(node) -> None:
+        if node.type in type_nodes:
+            out.append(node.start_point.row)
+            body = node.child_by_field_name("body")
+            if body is not None:
+                for m in body.named_children:
+                    if m.type in ("method_declaration", "constructor_declaration"):
+                        out.append(m.start_point.row)
+                    elif m.type in type_nodes:
+                        walk(m)
+            return
+        for c in node.named_children:
+            walk(c)
+
+    walk(tree.root_node)
+    return out
+
+
 def _anchors_for(source: bytes, suffix: str) -> tuple[list[int], str]:
     """Return (anchor_rows, comment_prefix) for a file by extension.
 
     suffix is the dotted file extension (`.py`, `.go`, `.ts`, `.tsx`,
-    `.js`, `.jsx`). Unknown extensions return ([], "") and the caller
-    treats them as "nothing to assign."
+    `.js`, `.jsx`, `.rs`, `.java`). Unknown extensions return ([], "")
+    and the caller treats them as "nothing to assign."
     """
     s = suffix.lower()
     if s == ".py":
@@ -209,6 +270,10 @@ def _anchors_for(source: bytes, suffix: str) -> tuple[list[int], str]:
         return _ts_anchors(source, is_tsx=True), "//"
     if s in (".ts", ".js", ".jsx"):
         return _ts_anchors(source), "//"
+    if s == ".rs":
+        return _rust_anchors(source), "//"
+    if s == ".java":
+        return _java_anchors(source), "//"
     return [], ""
 
 

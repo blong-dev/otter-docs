@@ -88,6 +88,39 @@ def _is_entry_point(name: str) -> bool:
     return False
 
 
+def _classify_visibility(name: str) -> str:
+    """Visibility class drives confidence ranking (2026-05-21 calibration).
+
+    - `private`: leading underscore (and not dunder) — by Python convention,
+      external code shouldn't import this; "no in-repo callers" is a strong
+      signal it's dead.
+    - `public_export`: leading uppercase — class-like API surface, often
+      exported and called from outside the repo. "No in-repo callers"
+      is a weak signal; library callers leave no trace in the graph.
+    - `public`: lowercase, no underscore prefix — somewhere in between.
+      Could be imported externally; could be genuinely orphaned.
+
+    Dunders (`__foo__`) are filtered upstream by `_is_entry_point`, so
+    they won't reach this classifier.
+    """
+    base = name.split(".")[-1]
+    if base.startswith("_"):
+        return "private"
+    if base[:1].isupper():
+        return "public_export"
+    return "public"
+
+
+# Multiplicative factor applied to the base confidence (which still
+# encodes whether resolve() ran). Lets downstream rank within a
+# single detector run instead of treating all dead_code at one number.
+_VISIBILITY_FACTOR = {
+    "private": 1.0,
+    "public": 0.7,
+    "public_export": 0.4,
+}
+
+
 class DeadCodeDetector:
     kind = "dead_code"
     cost_tier = "static"
@@ -98,7 +131,7 @@ class DeadCodeDetector:
         # module path, resolve() has produced cross-file edges and we
         # can trust the "no callers" signal more.
         resolution_ran = _detect_resolution_signal(repo, graph)
-        confidence = 0.75 if resolution_ran else 0.5
+        base_confidence = 0.75 if resolution_ran else 0.5
         edge_confidence = 0.8 if resolution_ran else 0.5
         edge_scope = "cross-file" if resolution_ran else "intra-file"
 
@@ -111,6 +144,8 @@ class DeadCodeDetector:
             callers = graph.callers_of(repo, fn.guid)
             if callers:
                 continue
+            visibility = _classify_visibility(fn.name)
+            confidence = base_confidence * _VISIBILITY_FACTOR[visibility]
             findings.append(Finding(
                 kind=self.kind,
                 confidence=confidence,
@@ -124,12 +159,13 @@ class DeadCodeDetector:
                     "callers_in_repo": 0,
                     "edge_scope": edge_scope,
                     "resolution_ran": resolution_ran,
+                    "visibility": visibility,
                 },
                 recommendation=Recommendation(
                     summary=f"Remove or verify external callers of `{fn.name}`",
                     rationale=(
                         f"`{fn.name}` has no callers in the {edge_scope} call "
-                        f"graph. "
+                        f"graph (visibility: {visibility}). "
                         + (
                             "Cross-file resolution has run, so this is a "
                             "stronger signal than pure AST-local analysis — "
@@ -139,6 +175,19 @@ class DeadCodeDetector:
                             "v0.1 hasn't resolved cross-file calls yet; "
                             "run Repo.resolve() first or confirm with a "
                             "grep before deleting."
+                        )
+                        + (
+                            " A `private` name (leading underscore) by "
+                            "Python convention shouldn't be imported "
+                            "externally, so this is a strong delete signal."
+                            if visibility == "private" else
+                            " A `public_export` name (leading uppercase) "
+                            "may be part of the public API surface — "
+                            "library callers don't show up in the in-repo "
+                            "call graph; confirm before deleting."
+                            if visibility == "public_export" else
+                            " A `public` name could be imported externally; "
+                            "confirm with a cross-repo grep before deleting."
                         )
                     ),
                     blast_radius=[fn.guid],

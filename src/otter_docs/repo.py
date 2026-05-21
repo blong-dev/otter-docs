@@ -8,20 +8,27 @@ later phases.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from otter_docs.backends import GraphBackend, SqliteBackend
 from otter_docs.clients.base import EmbeddingClient, LLMClient
 from otter_docs.describe import DescriptionCache, SqliteDescriptionCache
 from otter_docs.detectors import run_all as _run_detectors
+from otter_docs.detectors import run_all_stream as _run_detectors_stream
 from otter_docs.detectors.base import CostTier
 from otter_docs.discovery import is_tsx, iter_source_files
 from otter_docs.embedcache import EmbeddingCache, SqliteEmbeddingCache
 from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.llm_direct import (
+    RedundancyVerdict,
     Review,
+)
+from otter_docs.llm_direct import (
+    confirm_redundancy as _confirm_redundancy,
 )
 from otter_docs.llm_direct import (
     propose_consolidation as _propose_consolidation,
@@ -54,6 +61,7 @@ class ScanReport:
     classes: int = 0
     edges: int = 0
     errors: list[tuple[Path, str]] = field(default_factory=list)
+    languages_seen: set[Language] = field(default_factory=set)
 
 
 class Repo:
@@ -103,6 +111,7 @@ class Repo:
         # graph; for other backends we fall back to an in-memory dict.
         self._description_cache: DescriptionCache | None = None
         self._embedding_cache: EmbeddingCache | None = None
+        self._verdict_cache: Any = None
 
     # ── functional in phase 1 ────────────────────────────────────────
 
@@ -151,6 +160,7 @@ class Repo:
 
         for abs_path, language in iter_source_files(self.root):
             report.files_seen += 1
+            report.languages_seen.add(language)
             rel = abs_path.relative_to(self.root).as_posix()
             try:
                 source = abs_path.read_bytes()
@@ -181,6 +191,23 @@ class Repo:
                 self._backend.add_function(fn)
             for cls in result.classes:
                 self._backend.add_class(cls)
+            # Purge stale records from prior scans: functions / classes
+            # whose hash-anchored guid no longer matches because they
+            # moved a few lines in the source. Without this purge a
+            # nightly re-scan leaves ghost rows around and downstream
+            # detectors (especially semantic_equivalence) get poisoned
+            # — see docs/specs/refactor/ts-parser-incomplete-slices.md.
+            try:
+                self._backend.delete_orphans_in_module(
+                    self.name, rel,
+                    keep_function_guids={fn.guid for fn in result.functions},
+                    keep_class_guids={cls.guid for cls in result.classes},
+                )
+            except (AttributeError, NotImplementedError):
+                # Older backend without the method — skip cleanup.
+                # Spec lists this as a known limitation for non-default
+                # backends until they add the method.
+                pass
             for edge in result.edges:
                 self._add_edge(edge)
 
@@ -221,12 +248,22 @@ class Repo:
         ----------
         languages :
             Optional filter. Default runs every registered resolver.
+
+        Notes
+        -----
+        Languages present in the graph but missing a registered
+        resolver produce a warning entry in the returned report (with
+        install hint). Silence per-language via `OTTER_RESOLVER_QUIET`.
         """
+        languages_seen = {
+            m.language for m in self._backend.list_modules(repo=self.name)
+        }
         return _resolve_repo(
             repo=self.name,
             repo_root=self.root,
             graph=self._backend,
             languages=languages,
+            languages_seen=languages_seen,
         )
 
     def enrich(
@@ -346,6 +383,30 @@ class Repo:
             self.name, self._backend, kinds=kinds, cost_tiers=cost_tiers
         )
 
+    def findings_stream(
+        self,
+        *,
+        kinds: set[str] | None = None,
+        cost_tiers: set[CostTier] | None = None,
+    ) -> Iterator[Finding]:
+        """Streaming form of `findings()` — yield Findings one at a time.
+
+        Useful when the caller wants to act on each Finding the moment a
+        detector emits it (publish to a message bus, render to a stream,
+        early-stop on a quota) instead of waiting for every detector to
+        finish before getting the first result.
+
+        Each detector still runs sequentially; what streams is the *gap
+        between detectors finishing*. Detectors that opt into per-finding
+        streaming (by defining `run_stream`) yield individually within
+        themselves; others fall back to materializing then yielding.
+
+        Same filter semantics as `findings()`.
+        """
+        return _run_detectors_stream(
+            self.name, self._backend, kinds=kinds, cost_tiers=cost_tiers
+        )
+
     # ── LLM-direct tier (Phase 7) ────────────────────────────────────
 
     def propose_consolidation(
@@ -370,6 +431,56 @@ class Repo:
             graph=self._backend,
             llm=llm,
         )
+
+    def confirm_redundancy(
+        self,
+        finding: Finding,
+        llm: LLMClient,
+    ) -> RedundancyVerdict:
+        """Ask the LLM to confirm a `redundancy.*` Finding is really
+        a duplicate, or to reclassify it as sibling / shared_pattern /
+        coincidental.
+
+        Designed for the publisher path: the embedding-tier detector
+        is high-recall (it surfaces candidate pairs from description
+        similarity), and this is the high-precision second pass that
+        reads both function bodies before deciding. The harness gates
+        publish on `verdict.is_duplicate` (and optionally on
+        `verdict.confidence`).
+
+        Verdicts are cached content-addressed in the repo's graph.db
+        (mirrors describe + embed cache pattern) so steady-state
+        nightly runs make ~zero LLM calls on unchanged pairs. First
+        call materializes the cache; subsequent calls short-circuit.
+        """
+        return _confirm_redundancy(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            llm=llm,
+            cache=self._default_verdict_cache(),
+        )
+
+    def _default_verdict_cache(self) -> Any:
+        """Return (and memoize) this repo's default verdict cache.
+
+        Mirrors `_default_description_cache` / `_default_embedding_cache`:
+        on a SqliteBackend, verdicts persist in the same graph.db file
+        (sibling of `code_descriptions`); other backends fall back to
+        an in-memory dict.
+        """
+        if self._verdict_cache is not None:
+            return self._verdict_cache
+        from otter_docs.verdictcache import (
+            InMemoryRedundancyCache,
+            SqliteRedundancyCache,
+        )
+        if isinstance(self._backend, SqliteBackend):
+            self._verdict_cache = SqliteRedundancyCache(self._backend.conn)
+        else:
+            self._verdict_cache = InMemoryRedundancyCache()
+        return self._verdict_cache
 
     def review_change(
         self,
@@ -478,8 +589,15 @@ class Repo:
 
         target = Path(path)
         if sections is None:
-            # Stable, readable order — overview first, smells last.
+            # Stable, readable order — README first (what a human reader
+            # expects at the top), then infrastructure surfaces, then
+            # code-graph overview, then findings.
             order = [
+                "readme",
+                "dependencies",
+                "license",
+                "source_layout",
+                "tests",
                 "system_overview",
                 "findings_summary",
                 "redundancy_report",

@@ -28,5 +28,17 @@ __all__ = [
 def _bootstrap() -> None:
     from otter_docs.render import renderers as _r  # noqa: F401
 
+    # Pair each registered infra detector with its renderer and
+    # register the resulting section on the existing Renderer
+    # registry. Importing `otter_docs.infra` triggers detector
+    # self-registration; `register_infra_sections` then bridges
+    # detectors → renderers → registry.
+    try:
+        import otter_docs.infra  # noqa: F401
+        from otter_docs.render.infra import register_infra_sections
+        register_infra_sections()
+    except ImportError:
+        pass  # infra layer hasn't shipped yet — code-graph sections only
+
 
 _bootstrap()

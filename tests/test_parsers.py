@@ -132,10 +132,156 @@ def test_unknown_language_returns_none():
     assert r is None
 
 
-@pytest.mark.parametrize("lang", [Language.PYTHON, Language.GO, Language.TYPESCRIPT])
+@pytest.mark.parametrize(
+    "lang",
+    [
+        Language.PYTHON,
+        Language.GO,
+        Language.TYPESCRIPT,
+        Language.RUST,
+        Language.JAVA,
+    ],
+)
 def test_empty_source_yields_empty_records(lang: Language):
     r = parse_file(repo="r", path="empty", source=b"", language=lang)
     assert r is not None
     assert r.module.path == "empty"
     assert r.functions == []
     assert r.classes == []
+
+
+# ── Rust ─────────────────────────────────────────────────────────────
+
+
+def test_rust_function_and_imports():
+    src = (
+        b"use std::io;\n"
+        b"use std::collections::HashMap;\n"
+        b"\n"
+        b"fn add(a: i32, b: i32) -> i32 {\n"
+        b"    a + b\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="m.rs", source=src, language=Language.RUST)
+    assert r is not None
+    assert r.module.imports == ["std::io", "std::collections::HashMap"]
+    assert [f.name for f in r.functions] == ["add"]
+    assert r.functions[0].args == ["a", "b"]
+
+
+def test_rust_struct_and_impl_methods_qualified():
+    src = (
+        b"struct Calc { value: i32 }\n"
+        b"\n"
+        b"impl Calc {\n"
+        b"    fn new() -> Self { Calc { value: 0 } }\n"
+        b"    pub fn add(&mut self, x: i32) { self.value += x; }\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="m.rs", source=src, language=Language.RUST)
+    assert r is not None
+    assert any(c.name == "Calc" for c in r.classes)
+    fn_names = sorted(f.name for f in r.functions)
+    assert "Calc.new" in fn_names
+    assert "Calc.add" in fn_names
+
+
+def test_rust_enum_and_trait():
+    src = (
+        b"enum Status { Ok, Err }\n"
+        b"\n"
+        b"trait Greet {\n"
+        b"    fn say(&self) -> String;\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="m.rs", source=src, language=Language.RUST)
+    assert r is not None
+    class_names = {c.name for c in r.classes}
+    assert "Status" in class_names
+    assert "Greet" in class_names
+    # Trait method signature should be captured as a function.
+    assert any(f.name == "Greet.say" for f in r.functions)
+
+
+def test_rust_intra_file_call_edge():
+    src = (
+        b"fn helper() -> i32 { 1 }\n"
+        b"fn caller() -> i32 { helper() + 1 }\n"
+    )
+    r = parse_file(repo="r", path="m.rs", source=src, language=Language.RUST)
+    assert r is not None
+    call_edges = [e for e in r.edges if e.kind == "CALLS"]
+    assert len(call_edges) == 1
+    helper_fn = next(f for f in r.functions if f.name == "helper")
+    caller_fn = next(f for f in r.functions if f.name == "caller")
+    assert call_edges[0].src_id == caller_fn.guid
+    assert call_edges[0].dst_id == helper_fn.guid
+
+
+# ── Java ─────────────────────────────────────────────────────────────
+
+
+def test_java_class_and_methods_qualified():
+    src = (
+        b"package com.example;\n"
+        b"import java.util.List;\n"
+        b"\n"
+        b"public class Calc {\n"
+        b"    private int value;\n"
+        b"    public Calc() { this.value = 0; }\n"
+        b"    public int add(int x) { this.value += x; return this.value; }\n"
+        b"    public static int square(int n) { return n * n; }\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="M.java", source=src, language=Language.JAVA)
+    assert r is not None
+    assert r.module.imports == ["java.util.List"]
+    assert any(c.name == "Calc" for c in r.classes)
+    fn_names = sorted(f.name for f in r.functions)
+    assert "Calc.Calc" in fn_names    # constructor
+    assert "Calc.add" in fn_names
+    assert "Calc.square" in fn_names
+    add_fn = next(f for f in r.functions if f.name == "Calc.add")
+    assert add_fn.args == ["x"]
+
+
+def test_java_interface_and_enum_become_classes():
+    src = (
+        b"interface Greet { String say(String name); }\n"
+        b"enum Status { OK, ERR }\n"
+    )
+    r = parse_file(repo="r", path="M.java", source=src, language=Language.JAVA)
+    assert r is not None
+    class_names = {c.name for c in r.classes}
+    assert {"Greet", "Status"} <= class_names
+    assert any(f.name == "Greet.say" for f in r.functions)
+
+
+def test_java_intra_file_call_edge():
+    src = (
+        b"public class Calc {\n"
+        b"    int helper() { return 1; }\n"
+        b"    int caller() { return helper() + 1; }\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="M.java", source=src, language=Language.JAVA)
+    assert r is not None
+    call_edges = [e for e in r.edges if e.kind == "CALLS"]
+    assert len(call_edges) == 1
+    helper_fn = next(f for f in r.functions if f.name == "Calc.helper")
+    caller_fn = next(f for f in r.functions if f.name == "Calc.caller")
+    assert call_edges[0].src_id == caller_fn.guid
+    assert call_edges[0].dst_id == helper_fn.guid
+
+
+def test_java_nested_class_methods_qualified_to_inner():
+    src = (
+        b"public class Outer {\n"
+        b"    static class Inner {\n"
+        b"        int ping() { return 0; }\n"
+        b"    }\n"
+        b"}\n"
+    )
+    r = parse_file(repo="r", path="M.java", source=src, language=Language.JAVA)
+    assert r is not None
+    assert any(f.name == "Inner.ping" for f in r.functions)

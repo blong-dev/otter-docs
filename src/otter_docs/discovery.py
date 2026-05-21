@@ -55,6 +55,8 @@ _EXTENSION_LANGUAGES: dict[str, Language] = {
     ".jsx": Language.JAVASCRIPT,
     ".mjs": Language.JAVASCRIPT,
     ".cjs": Language.JAVASCRIPT,
+    ".rs": Language.RUST,
+    ".java": Language.JAVA,
 }
 
 

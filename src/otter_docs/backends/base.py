@@ -103,6 +103,27 @@ class GraphBackend(Protocol):
         Without `repo`, wipes everything.
         """
 
+    def delete_orphans_in_module(
+        self,
+        repo: str,
+        path: str,
+        *,
+        keep_function_guids: set[str],
+        keep_class_guids: set[str],
+    ) -> int:
+        """Delete code_functions / code_classes rows for this module
+        whose guid isn't in the keep set. Returns the count deleted.
+
+        Called by `scan()` after re-parsing a file so a function that
+        moved between scans (and got a new hash-based guid) doesn't
+        leave a stale row behind. See
+        `docs/specs/refactor/ts-parser-incomplete-slices.md`.
+
+        Callers pass an empty keep set to purge every record from a
+        module (rare; mostly for tests). The vector tables are
+        cascade-cleaned along with the parent rows.
+        """
+
     def query(self, raw: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         """Backend-specific raw query escape hatch.
 

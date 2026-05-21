@@ -68,6 +68,46 @@ def _strip_pystring(raw: str) -> str:
     return raw
 
 
+# Tree-sitter Python node types that are McCabe decision points. Same
+# rule set as radon: branches, loops, except handlers, boolean ops,
+# ternary, and comprehension clauses. `assert` is intentionally
+# excluded (industry split; radon counts it, sourcery doesn't — keep
+# the metric conservative so it isn't dominated by test files).
+_CYCLOMATIC_NODES: frozenset[str] = frozenset({
+    "if_statement",
+    "elif_clause",
+    "for_statement",
+    "while_statement",
+    "except_clause",
+    "boolean_operator",
+    "conditional_expression",
+    "for_in_clause",
+    "if_clause",
+})
+
+
+def _cyclomatic(body: Node | None) -> int | None:
+    """McCabe complexity of the function body (1 + decision points).
+
+    Returns None when the body is absent (signature-only / abstract).
+    """
+    if body is None:
+        return None
+    count = 1
+    stack: list[Node] = [body]
+    while stack:
+        n = stack.pop()
+        if n.type in _CYCLOMATIC_NODES:
+            count += 1
+        # Don't descend into nested function/class bodies — their
+        # complexity is recorded on their own record, not folded in.
+        if n is not body and n.type in ("function_definition", "class_definition"):
+            continue
+        for c in n.named_children:
+            stack.append(c)
+    return count
+
+
 def _name(node: Node, field: str = "name") -> str:
     target = node.child_by_field_name(field)
     return target.text.decode("utf-8", errors="replace") if target else ""
@@ -113,6 +153,7 @@ class _Walker:
             docstring=_docstring(body),
             args=args,
             is_async=is_async,
+            cyclomatic_complexity=_cyclomatic(body),
         )
         self.functions.append(record)
         if parent_class_guid is not None:

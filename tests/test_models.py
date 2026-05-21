@@ -73,4 +73,4 @@ def test_vector_kind_values():
 def test_language_unknown_default_for_unrecognized():
     """Language enum doesn't auto-fallback; unknown strings raise."""
     with pytest.raises(ValueError):
-        Language("rust")  # not in our v0.1 set
+        Language("kotlin")  # not in our supported set

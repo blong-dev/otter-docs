@@ -162,3 +162,68 @@ def test_resolve_method_call_finds_class_method(tmp_path: Path):
             for n in method_name_candidates
         )
         assert any_with_caller
+
+
+# ── loud-skip: missing resolver should produce a warning ────────────
+
+
+def _install_pyfile(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+
+
+def test_resolve_warns_when_seen_language_has_no_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If scan sees `.py` files but no Python resolver is registered,
+    `resolve()` returns a synthesized report with a warning and the
+    install hint — this is the failure mode we don't want silent."""
+    _install_pyfile(tmp_path)
+    # Force Python out of the registry for this test, regardless of
+    # whether jedi happens to be installed in the test env.
+    from otter_docs.resolvers import base as resolver_base
+    monkeypatch.setitem(resolver_base._registry, Language.PYTHON, None)
+    monkeypatch.delitem(resolver_base._registry, Language.PYTHON)
+    monkeypatch.delenv("OTTER_RESOLVER_QUIET", raising=False)
+
+    backend = SqliteBackend(":memory:", vector_dim=8)
+    with Repo(tmp_path, name="rtest", backend=backend) as repo:
+        repo.scan()
+        reports = repo.resolve()
+        assert Language.PYTHON in reports
+        warnings = reports[Language.PYTHON].warnings
+        assert warnings, "expected a missing-resolver warning for python"
+        # The warning carries the install hint so the user can act on it.
+        assert "pip install otter-docs[python-resolver]" in warnings[0]
+        # And it surfaces the env-var escape hatch.
+        assert "OTTER_RESOLVER_QUIET=python" in warnings[0]
+
+
+def test_resolve_silenced_via_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OTTER_RESOLVER_QUIET=<lang> drops the warning for that language."""
+    _install_pyfile(tmp_path)
+    from otter_docs.resolvers import base as resolver_base
+    monkeypatch.delitem(resolver_base._registry, Language.PYTHON, raising=False)
+    monkeypatch.setenv("OTTER_RESOLVER_QUIET", "python")
+
+    backend = SqliteBackend(":memory:", vector_dim=8)
+    with Repo(tmp_path, name="rtest", backend=backend) as repo:
+        repo.scan()
+        reports = repo.resolve()
+        # No entry at all for Python — it's neither registered nor warned.
+        assert Language.PYTHON not in reports
+
+
+def test_install_hint_declared_for_every_supported_language() -> None:
+    """Each shipped resolver module declares its install hint at import
+    time — even when its tooling is absent — so the missing-resolver
+    warning can render an actionable command."""
+    from otter_docs.resolvers.base import install_hint_for
+
+    py = install_hint_for(Language.PYTHON)
+    go = install_hint_for(Language.GO)
+    ts = install_hint_for(Language.TYPESCRIPT)
+    assert py and "pip install otter-docs[python-resolver]" in py
+    assert go and "gopls" in go
+    assert ts and "typescript-language-server" in ts

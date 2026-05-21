@@ -25,10 +25,19 @@ from typing import TYPE_CHECKING
 
 from otter_docs.backends.base import GraphBackend
 from otter_docs.models import Edge, Language
-from otter_docs.resolvers.base import register
+from otter_docs.resolvers.base import declare_install_hint, register
 
 if TYPE_CHECKING:
     pass  # jedi imported lazily inside resolve() so it stays an opt-in dep
+
+
+INSTALL_HINT = "pip install otter-docs[python-resolver]  # adds jedi"
+declare_install_hint(Language.PYTHON, INSTALL_HINT)
+
+
+def _module_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("jedi") is not None
 
 
 class JediResolver:
@@ -213,4 +222,5 @@ def _enclosing_function_guid(
     return best_guid
 
 
-register(JediResolver())
+if _module_available():
+    register(JediResolver())

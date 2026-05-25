@@ -13,6 +13,7 @@ the harness decides what to do with it.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -23,6 +24,8 @@ from otter_docs.backends.base import GraphBackend
 from otter_docs.clients.base import LLMClient
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.models import FunctionRecord
+
+logger = logging.getLogger("otter_docs.llm_direct")
 
 # ── public schemas ──────────────────────────────────────────────────────
 
@@ -363,7 +366,11 @@ def confirm_redundancy(
         from otter_docs.verdictcache import llm_model_id, verdict_content_hash
         cache_key = verdict_content_hash(a_src, b_src)
         model_id = llm_model_id(llm)
-        hit = cache.get(cache_key, llm_model=model_id)
+        try:
+            hit = cache.get(cache_key, llm_model=model_id)
+        except Exception:
+            logger.debug("verdict cache read failed; computing fresh", exc_info=True)
+            hit = None
         if hit is not None:
             return hit
 
@@ -377,7 +384,14 @@ def confirm_redundancy(
     verdict = _parse_redundancy_verdict(raw)
 
     if cache is not None and cache_key is not None and model_id is not None:
-        cache.put(cache_key, llm_model=model_id, verdict=verdict)
+        try:
+            cache.put(cache_key, llm_model=model_id, verdict=verdict)
+        except Exception:
+            # Read-only cache (e.g. graph.db mounted :ro in a container),
+            # disk-full, etc. Persisting is an optimization; the verdict
+            # is already computed and must be returned regardless. A cache
+            # write failure must never discard a real result.
+            logger.debug("verdict cache write failed; verdict not persisted", exc_info=True)
 
     return verdict
 

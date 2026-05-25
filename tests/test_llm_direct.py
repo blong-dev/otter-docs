@@ -387,3 +387,31 @@ def test_parse_review_coerces_non_string_list_items():
     assert "1" in review.blockers
     assert "x" in review.blockers
     assert None not in review.blockers
+
+
+def test_confirm_redundancy_survives_readonly_cache(tmp_path: Path):
+    """A cache that raises on put (e.g. graph.db mounted read-only in a
+    container) must NOT discard a computed verdict. Regression for the
+    2026-05-25 production bug where readonly-cache writes fail-opened
+    every verdict to 'unjudged'."""
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        '{"is_duplicate": true, "confidence": 0.9, "kind": "duplicate", "reason": "x"}'
+    )])
+
+    class _ReadonlyCache:
+        def get(self, content_hash, *, llm_model):
+            return None
+        def put(self, content_hash, *, llm_model, verdict):
+            raise RuntimeError("attempt to write a readonly database")
+
+    from otter_docs.llm_direct import confirm_redundancy
+    v = confirm_redundancy(
+        finding=_redundancy_finding(repo, a, b),
+        repo=repo.name, repo_root=repo.root, graph=repo.graph,
+        llm=llm, cache=_ReadonlyCache(),
+    )
+    # Verdict is returned despite the cache write blowing up.
+    assert v.is_duplicate is True
+    assert v.kind == "duplicate"
+    repo.close()

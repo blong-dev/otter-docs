@@ -415,3 +415,27 @@ def test_confirm_redundancy_survives_readonly_cache(tmp_path: Path):
     assert v.is_duplicate is True
     assert v.kind == "duplicate"
     repo.close()
+
+
+def test_confirm_redundancy_accepts_injected_cache(tmp_path: Path):
+    """An explicit cache= (e.g. a writable cache when graph.db is
+    read-only) is used instead of the repo's default graph.db cache.
+    Verdict is written to the injected cache and a second call hits it
+    without invoking the LLM."""
+    repo, a, b = _setup_redundancy_repo(tmp_path)
+    from otter_docs.verdictcache import InMemoryRedundancyCache
+    injected = InMemoryRedundancyCache()
+    llm = _ScriptedLLM([("Two functions in the same codebase were flagged",
+        '{"is_duplicate": true, "confidence": 0.9, "kind": "duplicate", "reason": "x"}'
+    )])
+    finding = _redundancy_finding(repo, a, b)
+
+    v1 = repo.confirm_redundancy(finding, llm, cache=injected)
+    assert v1.is_duplicate is True
+    assert len(llm.calls) == 1
+
+    # Second call with the same injected cache → hit, no new LLM call.
+    v2 = repo.confirm_redundancy(finding, llm, cache=injected)
+    assert v2 == v1
+    assert len(llm.calls) == 1
+    repo.close()

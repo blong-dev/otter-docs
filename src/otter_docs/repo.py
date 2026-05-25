@@ -436,6 +436,8 @@ class Repo:
         self,
         finding: Finding,
         llm: LLMClient,
+        *,
+        cache: Any = None,
     ) -> RedundancyVerdict:
         """Ask the LLM to confirm a `redundancy.*` Finding is really
         a duplicate, or to reclassify it as sibling / shared_pattern /
@@ -448,10 +450,15 @@ class Repo:
         publish on `verdict.is_duplicate` (and optionally on
         `verdict.confidence`).
 
-        Verdicts are cached content-addressed in the repo's graph.db
-        (mirrors describe + embed cache pattern) so steady-state
-        nightly runs make ~zero LLM calls on unchanged pairs. First
-        call materializes the cache; subsequent calls short-circuit.
+        Verdicts are cached content-addressed (mirrors describe +
+        embed cache pattern) so steady-state runs make ~zero LLM
+        calls on unchanged pairs. By default the cache lives in this
+        repo's graph.db. Pass an explicit `cache` (any object
+        implementing the `RedundancyCache` Protocol) to redirect it —
+        e.g. a publisher running where graph.db is mounted read-only
+        points the cache at a writable location so verdicts persist
+        run-to-run. The content-hash key is repo-independent, so one
+        shared cache can serve multiple repos.
         """
         return _confirm_redundancy(
             finding=finding,
@@ -459,7 +466,7 @@ class Repo:
             repo_root=self.root,
             graph=self._backend,
             llm=llm,
-            cache=self._default_verdict_cache(),
+            cache=cache if cache is not None else self._default_verdict_cache(),
         )
 
     def _default_verdict_cache(self) -> Any:

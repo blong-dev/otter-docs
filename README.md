@@ -114,7 +114,9 @@ otter-docs init .            # bootstrap SYSTEM.md with markers
 otter-docs install-hooks .   # git pre-commit/pre-push
 otter-docs serve .           # MCP server (needs the [mcp] extra)
 otter-docs assign-guids .    # mint `# guid:` / `// guid:` markers
-otter-docs onboard --manifest repos.toml   # multi-repo fleet
+otter-docs onboard --manifest repos.toml   # multi-repo fleet onboarding
+otter-docs status  --manifest repos.toml   # per-repo heartbeat (non-zero exit if stale)
+otter-docs systemd --manifest repos.toml   # emit scheduled-onboard systemd unit files
 ```
 
 ## What's implemented

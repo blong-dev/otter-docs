@@ -8,13 +8,26 @@ produce minimal diffs.
 
 from __future__ import annotations
 
+import os
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
+from otter_docs.discovery import is_test_path
 from otter_docs.render.base import register
 
 if TYPE_CHECKING:
     from otter_docs.repo import Repo
+
+
+def _include_tests() -> bool:
+    """Whether production-focused renders should include test code. Off by
+    default so test fixtures don't dominate the signal; opt in with
+    ``OTTER_INCLUDE_TESTS=1`` (the ``render --include-tests`` flag sets it)."""
+    return os.environ.get("OTTER_INCLUDE_TESTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def _counts(repo: Repo) -> tuple[int, int, int]:
@@ -39,8 +52,13 @@ class SystemOverviewRenderer:
             lang = m.language.value if hasattr(m.language, "value") else str(m.language)
             by_lang[lang] += 1
 
+        include_tests = _include_tests()
+        n_test_modules = sum(1 for m in modules if is_test_path(m.path))
+
         fns_per_module: Counter[str] = Counter()
         for f in fns:
+            if not include_tests and is_test_path(f.module_path):
+                continue
             fns_per_module[f.module_path] += 1
         biggest = fns_per_module.most_common(10)
 
@@ -53,9 +71,20 @@ class SystemOverviewRenderer:
             lines.append(f"- {lang}: {n} modules")
         lines.append("")
         if biggest:
-            lines.append("Largest modules by function count:")
+            label = (
+                "Largest modules by function count:"
+                if include_tests
+                else "Largest production modules by function count:"
+            )
+            lines.append(label)
             for path, n in biggest:
                 lines.append(f"- `{path}` — {n} functions")
+            if n_test_modules and not include_tests:
+                lines.append("")
+                lines.append(
+                    f"_{n_test_modules} test module(s) excluded; "
+                    "set OTTER_INCLUDE_TESTS=1 to include._"
+                )
         return "\n".join(lines)
 
 
@@ -151,14 +180,23 @@ class ArchitectureSmellsRenderer:
     name = "architecture_smells"
 
     def render(self, repo: Repo) -> str:
+        include_tests = _include_tests()
         large = sorted(
             repo.findings(kinds={"large_function"}),
             key=lambda f: f.evidence.get("lines", 0),
             reverse=True,
         )
+        if not include_tests:
+            large = [
+                f
+                for f in large
+                if not (f.locations and is_test_path(f.locations[0].path))
+            ]
         fns = list(repo.graph.list_functions(repo.name))
         fan_in: list[tuple[int, str, str]] = []
         for fn in fns:
+            if not include_tests and is_test_path(fn.module_path):
+                continue
             n = len(repo.graph.callers_of(repo.name, fn.guid))
             if n >= 8:  # arbitrary "hub" threshold for v0.1
                 fan_in.append((n, fn.name, fn.module_path))

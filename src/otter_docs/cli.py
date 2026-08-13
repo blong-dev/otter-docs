@@ -242,9 +242,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         flag = "OK  " if (s.ok and not s.stale and not s.errors) else "BAD "
         age = f"{s.age_seconds/3600:.1f}h" if s.age_seconds is not None else "—"
         stale = " STALE" if s.stale else ""
+        grade = f" grade={s.grade_letter}" if s.grade_letter else ""
         print(f"[{flag}] {s.name}: last={s.last_onboard or 'never'} "
               f"age={age}{stale} scanned={s.scanned} "
-              f"findings={s.findings} enriched={s.enriched}")
+              f"findings={s.findings} enriched={s.enriched}{grade}")
         for d in s.degradations:
             print(f"    degraded: {d}")
         for e in s.errors:

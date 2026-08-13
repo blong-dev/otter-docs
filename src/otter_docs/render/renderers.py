@@ -185,11 +185,48 @@ class ArchitectureSmellsRenderer:
         return "\n".join(lines)
 
 
+class GradeRenderer:
+    """The senior-dev-style health grade: overall letter + per-dimension
+    breakdown + the top findings that most moved it. Surfaces the Harness
+    grade (otherwise computed-but-invisible) into the rendered document."""
+
+    name = "grade"
+
+    def render(self, repo: Repo) -> str:
+        report = repo.grade()
+        lines = [
+            f"**Overall grade: {report.overall_letter}** "
+            f"({report.overall_score:.0f}/100)",
+        ]
+        if report.summary:
+            lines.append("")
+            lines.append(report.summary)
+        if report.grades:
+            lines.append("")
+            lines.append("| dimension | grade | score | findings |")
+            lines.append("|---|:--:|--:|--:|")
+            for g in sorted(report.grades, key=lambda x: (x.assessed, x.score)):
+                letter = g.letter if g.assessed else "n/a"
+                score = f"{g.score:.0f}" if g.assessed else "—"
+                lines.append(
+                    f"| {g.dimension} | {letter} | {score} | {g.finding_count} |"
+                )
+        if report.top_findings:
+            lines.append("")
+            lines.append("Top findings:")
+            for f in report.top_findings[:5]:
+                loc = f.locations[0] if f.locations else None
+                where = f" — `{loc.path}`:{loc.line}" if loc else ""
+                lines.append(f"- `{f.kind}` (conf {f.confidence:.2f}){where}")
+        return "\n".join(lines)
+
+
 def _mermaid_id(s: str) -> str:
     """Mermaid node ids can't contain slashes/dots — slugify."""
     return "n_" + "".join(c if c.isalnum() else "_" for c in s)
 
 
+register(GradeRenderer())
 register(SystemOverviewRenderer())
 register(FindingsSummaryRenderer())
 register(RedundancyReportRenderer())

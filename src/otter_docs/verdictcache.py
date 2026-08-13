@@ -27,11 +27,14 @@ import hashlib
 import sqlite3
 from typing import Protocol
 
-from otter_docs.llm_direct import RedundancyVerdict
+from otter_docs.llm_direct import DescriptionVerdict, RedundancyVerdict
 
 __all__ = [
+    "DescriptionVerdictCache",
+    "InMemoryDescriptionVerdictCache",
     "InMemoryRedundancyCache",
     "RedundancyCache",
+    "SqliteDescriptionVerdictCache",
     "SqliteRedundancyCache",
     "llm_model_id",
     "verdict_content_hash",
@@ -151,5 +154,128 @@ class InMemoryRedundancyCache:
         *,
         llm_model: str,
         verdict: RedundancyVerdict,
+    ) -> None:
+        self._d[(content_hash, llm_model)] = verdict
+
+
+# ── description verdict cache (confirm_description) ─────────────────────────
+# Mirrors the redundancy cache: content-addressed by sha1(docstring + source)
+# + llm model id (via verdict_content_hash), persisted alongside the graph.
+
+
+class DescriptionVerdictCache(Protocol):
+    """Pluggable storage for (content_hash, llm_model) → DescriptionVerdict."""
+
+    def get(
+        self, content_hash: str, *, llm_model: str
+    ) -> DescriptionVerdict | None: ...
+
+    def get_any(self, content_hash: str) -> DescriptionVerdict | None:
+        """Model-agnostic read (most recent verdict for the hash). For
+        LLM-less consumers that want to reflect confirmed verdicts."""
+        ...
+
+    def put(
+        self,
+        content_hash: str,
+        *,
+        llm_model: str,
+        verdict: DescriptionVerdict,
+    ) -> None: ...
+
+
+class SqliteDescriptionVerdictCache:
+    """SQLite-backed cache, in the same graph.db as `code_descriptions`."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS description_verdicts (
+                content_hash    TEXT NOT NULL,
+                llm_model       TEXT NOT NULL,
+                is_stale        INTEGER NOT NULL,
+                confidence      REAL NOT NULL,
+                kind            TEXT NOT NULL,
+                reason          TEXT NOT NULL,
+                created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (content_hash, llm_model)
+            )
+        """)
+        self._conn.commit()
+
+    @staticmethod
+    def _row_to_verdict(row: tuple) -> DescriptionVerdict:
+        return DescriptionVerdict(
+            is_stale=bool(row[0]),
+            confidence=float(row[1]),
+            kind=row[2],
+            reason=row[3],
+        )
+
+    def get(
+        self, content_hash: str, *, llm_model: str
+    ) -> DescriptionVerdict | None:
+        row = self._conn.execute(
+            "SELECT is_stale, confidence, kind, reason "
+            "FROM description_verdicts WHERE content_hash = ? AND llm_model = ?",
+            (content_hash, llm_model),
+        ).fetchone()
+        return self._row_to_verdict(row) if row is not None else None
+
+    def get_any(self, content_hash: str) -> DescriptionVerdict | None:
+        row = self._conn.execute(
+            "SELECT is_stale, confidence, kind, reason "
+            "FROM description_verdicts WHERE content_hash = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        return self._row_to_verdict(row) if row is not None else None
+
+    def put(
+        self,
+        content_hash: str,
+        *,
+        llm_model: str,
+        verdict: DescriptionVerdict,
+    ) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO description_verdicts "
+                "(content_hash, llm_model, is_stale, confidence, kind, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    content_hash,
+                    llm_model,
+                    1 if verdict.is_stale else 0,
+                    verdict.confidence,
+                    verdict.kind,
+                    verdict.reason,
+                ),
+            )
+
+
+class InMemoryDescriptionVerdictCache:
+    """In-memory cache for tests / one-shot runs."""
+
+    def __init__(self) -> None:
+        self._d: dict[tuple[str, str], DescriptionVerdict] = {}
+
+    def get(
+        self, content_hash: str, *, llm_model: str
+    ) -> DescriptionVerdict | None:
+        return self._d.get((content_hash, llm_model))
+
+    def get_any(self, content_hash: str) -> DescriptionVerdict | None:
+        for (ch, _model), verdict in reversed(self._d.items()):
+            if ch == content_hash:
+                return verdict
+        return None
+
+    def put(
+        self,
+        content_hash: str,
+        *,
+        llm_model: str,
+        verdict: DescriptionVerdict,
     ) -> None:
         self._d[(content_hash, llm_model)] = verdict

@@ -24,11 +24,17 @@ from otter_docs.embedcache import EmbeddingCache, SqliteEmbeddingCache
 from otter_docs.enrich import Enricher, EnrichReport
 from otter_docs.findings import Finding, Recommendation
 from otter_docs.llm_direct import (
+    DescriptionVerdict,
     RedundancyVerdict,
     Review,
 )
 from otter_docs.llm_direct import (
-    RedundancyVerdict,
+    cached_description_verdict as _cached_description_verdict,
+)
+from otter_docs.llm_direct import (
+    confirm_description as _confirm_description,
+)
+from otter_docs.llm_direct import (
     confirm_redundancy as _confirm_redundancy,
 )
 from otter_docs.llm_direct import (
@@ -116,6 +122,7 @@ class Repo:
         self._description_cache: DescriptionCache | None = None
         self._embedding_cache: EmbeddingCache | None = None
         self._verdict_cache: Any = None
+        self._description_verdict_cache: Any = None
 
     # ── functional in phase 1 ────────────────────────────────────────
 
@@ -508,6 +515,57 @@ class Repo:
         else:
             self._verdict_cache = InMemoryRedundancyCache()
         return self._verdict_cache
+
+    def confirm_description(
+        self, finding: Finding, llm: LLMClient
+    ) -> DescriptionVerdict:
+        """LLM judge for a `description.*` finding: does the symbol's docstring
+        still describe its code? Returns a structured verdict
+        (accurate / partial / stale / wrong); gate on `verdict.is_stale`.
+
+        This is the fix the `description.divergence` detector promised — it
+        replaces the untrustworthy raw cosine distance with a judgement that
+        reads both the docstring and the body. Verdicts are cached in this
+        repo's graph.db, so steady-state re-runs make ~zero LLM calls."""
+        return _confirm_description(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            llm=llm,
+            cache=self._default_description_verdict_cache(),
+        )
+
+    def cached_description_verdict(
+        self, finding: Finding
+    ) -> DescriptionVerdict | None:
+        """The cached `confirm_description` verdict for a finding, or None if
+        the docstring hasn't been judged yet. Read-only (no LLM)."""
+        return _cached_description_verdict(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            cache=self._default_description_verdict_cache(),
+        )
+
+    def _default_description_verdict_cache(self) -> Any:
+        """Return (and memoize) this repo's description-verdict cache. Mirrors
+        `_default_verdict_cache`: SqliteBackend persists in graph.db, other
+        backends fall back to in-memory."""
+        if self._description_verdict_cache is not None:
+            return self._description_verdict_cache
+        from otter_docs.verdictcache import (
+            InMemoryDescriptionVerdictCache,
+            SqliteDescriptionVerdictCache,
+        )
+        if isinstance(self._backend, SqliteBackend):
+            self._description_verdict_cache = SqliteDescriptionVerdictCache(
+                self._backend.conn
+            )
+        else:
+            self._description_verdict_cache = InMemoryDescriptionVerdictCache()
+        return self._description_verdict_cache
 
     def review_change(
         self,

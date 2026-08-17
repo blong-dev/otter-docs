@@ -86,6 +86,37 @@ class RedundancyVerdict(BaseModel):
     reason: str
 
 
+DescriptionKind = Literal["accurate", "partial", "stale", "wrong"]
+
+
+class DescriptionVerdict(BaseModel):
+    """LLM judgement on whether a symbol's docstring still describes its code.
+
+    Returned by `confirm_description`. The embedding-tier
+    `description.divergence` detector is recall-oriented — cosine distance
+    between the description vector and the code vector conflates real
+    staleness with "terse code + verbose prose". This verdict reads both the
+    docstring and the body and classifies the pair:
+
+    - accurate   the docstring faithfully describes what the code does
+    - partial    correct but materially incomplete (omits significant behavior)
+    - stale      describes behavior the code no longer has — it drifted
+    - wrong      contradicts the code; never true or no longer true
+
+    `is_stale` is the binary gate consumers act on: True when the docstring
+    materially misdescribes the code (kind in {"stale", "wrong"}). `partial`
+    is informational — a nudge, not a defect. `confidence` is the LLM's
+    certainty in [0, 1].
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    is_stale: bool
+    confidence: float
+    kind: DescriptionKind
+    reason: str
+
+
 # ── prompts (kept in code for now, not externalized) ────────────────────
 
 
@@ -169,6 +200,48 @@ Return a JSON object with these exact fields:
   confidence     your certainty in the label, 0.0 to 1.0
   kind           the label string
   reason         one sentence justifying the call
+
+Return JSON only — no commentary, no fenced block.
+"""
+
+
+_CONFIRM_DESCRIPTION_PROMPT = """\
+A function's docstring and its implementation were flagged as possibly out
+of sync by a vector heuristic. Read both and judge whether the docstring
+still describes what the code does.
+
+Symbol: {name}   ({path})
+
+Docstring (the documented claim):
+\"\"\"
+{docstring}
+\"\"\"
+
+Code:
+```{language}
+{source}
+```
+
+Pick exactly one label:
+  - "accurate"   — the docstring faithfully describes what the code does.
+                   Minor wording differences are fine.
+  - "partial"    — everything the docstring says is true, but it omits
+                   significant behavior the code has (side effects, error
+                   paths, additional returns). Correct-but-incomplete.
+  - "stale"      — the docstring describes behavior the code no longer has;
+                   the implementation moved on and the doc didn't.
+  - "wrong"      — the docstring contradicts the code: it claims something
+                   the code doesn't do (never did, or no longer does).
+
+Judge intent, not prose style. A terse one-liner with an accurate docstring
+is "accurate", not "partial". Only flag "stale"/"wrong" when the doc would
+actively mislead a reader of the code.
+
+Return a JSON object with these exact fields:
+  is_stale    true only when label is "stale" or "wrong"
+  confidence  your certainty in the label, 0.0 to 1.0
+  kind        the label string
+  reason      one sentence justifying the call
 
 Return JSON only — no commentary, no fenced block.
 """
@@ -430,6 +503,122 @@ def cached_redundancy_verdict(
     return cache.get_any(verdict_content_hash(a_src, b_src))
 
 
+def confirm_description(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    llm: LLMClient,
+    llm_options: dict[str, Any] | None = None,
+    cache: Any = None,  # DescriptionVerdictCache
+) -> DescriptionVerdict:
+    """Ask the LLM whether a symbol's docstring still describes its code.
+
+    The high-precision second pass over the `description.divergence`
+    detector's recall-oriented cosine signal: reads the docstring + body and
+    returns a structured verdict (accurate / partial / stale / wrong). The
+    consumer gates on `verdict.is_stale`. This is the fix the divergence
+    detector's docstring promised — it replaces the untrustworthy raw
+    cosine distance with a judgement that reads both sides.
+
+    Content-addressed cache by sha1(docstring + source) + llm model id (same
+    machinery as confirm_redundancy) — unchanged symbols make zero round
+    trips on subsequent runs.
+
+    Raises ValueError on a non-description.* finding or one without a location.
+    """
+    if not finding.kind.startswith("description."):
+        raise ValueError(
+            f"confirm_description expects a description.* finding, got {finding.kind!r}"
+        )
+    if not finding.locations:
+        raise ValueError("description finding must have a location")
+
+    fn = _fetch_function(graph, repo, finding.locations[0].guid)
+    if fn is None:
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason="Function could not be loaded from the graph.",
+        )
+    src = _read_slice(repo_root, fn)
+    if src is None:
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason="Could not read source on disk.",
+        )
+    docstring = (fn.docstring or "").strip()
+    if not docstring:
+        # Nothing to be stale about. Not a defect — the missing-docstring
+        # case is a different detector's job.
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason="No docstring to check.",
+        )
+
+    cache_key: str | None = None
+    model_id: str | None = None
+    if cache is not None:
+        from otter_docs.verdictcache import llm_model_id, verdict_content_hash
+        cache_key = verdict_content_hash(docstring, src)
+        model_id = llm_model_id(llm)
+        try:
+            hit = cache.get(cache_key, llm_model=model_id)
+        except Exception:
+            logger.debug(
+                "description verdict cache read failed; computing fresh",
+                exc_info=True,
+            )
+            hit = None
+        if hit is not None:
+            return hit
+
+    language = _infer_language(graph, repo, fn)
+    prompt = _CONFIRM_DESCRIPTION_PROMPT.format(
+        name=fn.name, path=fn.module_path, docstring=docstring,
+        source=src, language=language,
+    )
+    raw = llm.complete(
+        prompt, **(llm_options or {"temperature": 0.0, "num_predict": 300})
+    )
+    verdict = _parse_description_verdict(raw)
+
+    if cache is not None and cache_key is not None and model_id is not None:
+        try:
+            cache.put(cache_key, llm_model=model_id, verdict=verdict)
+        except Exception:
+            logger.debug(
+                "description verdict cache write failed; verdict not persisted",
+                exc_info=True,
+            )
+
+    return verdict
+
+
+def cached_description_verdict(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    cache: Any,  # DescriptionVerdictCache
+) -> DescriptionVerdict | None:
+    """Read-only sibling of `confirm_description`: the cached verdict without
+    an LLM, or None if the docstring hasn't been judged yet. Same content
+    key; model-agnostic. Lets an LLM-less consumer reflect confirmed verdicts."""
+    if not finding.kind.startswith("description.") or not finding.locations:
+        return None
+    fn = _fetch_function(graph, repo, finding.locations[0].guid)
+    if fn is None:
+        return None
+    src = _read_slice(repo_root, fn)
+    docstring = (fn.docstring or "").strip()
+    if src is None or not docstring:
+        return None
+    from otter_docs.verdictcache import verdict_content_hash
+    return cache.get_any(verdict_content_hash(docstring, src))
+
+
 def review_change(
     *,
     diff: str,
@@ -554,6 +743,48 @@ def _parse_redundancy_verdict(raw: str) -> RedundancyVerdict:
     confidence = max(0.0, min(1.0, confidence))
     return RedundancyVerdict(
         is_duplicate=is_dup,
+        confidence=confidence,
+        kind=kind,  # type: ignore[arg-type]
+        reason=str(data.get("reason", "")),
+    )
+
+
+_VALID_DESCRIPTION_KINDS = {"accurate", "partial", "stale", "wrong"}
+
+
+def _parse_description_verdict(raw: str) -> DescriptionVerdict:
+    """Parse the LLM's JSON verdict; fall back to 'accurate, zero confidence'
+    on any parse failure — never raise, and never invent staleness the model
+    didn't assert."""
+    text = raw.strip()
+    m = re.match(r"```(?:json)?\n([\s\S]*?)\n```", text)
+    if m:
+        text = m.group(1).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason=f"unparseable LLM response: {text[:120]}",
+        )
+    if not isinstance(data, dict):
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason=f"non-object LLM response: {str(data)[:120]}",
+        )
+    kind = data.get("kind")
+    if kind not in _VALID_DESCRIPTION_KINDS:
+        kind = "accurate"
+    # Re-derive is_stale from kind for consistency — the model sometimes sets
+    # one without the other.
+    is_stale = kind in ("stale", "wrong")
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    return DescriptionVerdict(
+        is_stale=is_stale,
         confidence=confidence,
         kind=kind,  # type: ignore[arg-type]
         reason=str(data.get("reason", "")),

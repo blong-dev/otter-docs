@@ -92,7 +92,7 @@ def test_extract_tokens_skips_fenced_code():
 def test_doc_findings_resolves_backtick_symbol(tmp_path: Path):
     repo = _repo_with(
         tmp_path, _CODE,
-        {"README.md": "# Guide\n\nThe `calculate_total` helper sums prices.\n"},
+        {"README.md": "# `calculate_total`\n\nThe `calculate_total` helper sums item prices.\n"},
     )
     finds = repo.doc_findings()
     assert len(finds) == 1
@@ -108,7 +108,7 @@ def test_doc_findings_resolves_backtick_symbol(tmp_path: Path):
 def test_doc_findings_resolves_file_path_to_module(tmp_path: Path):
     repo = _repo_with(
         tmp_path, _CODE,
-        {"docs/specs/x.md": "# Spec\n\nSee `parser.py` for the summation.\n"},
+        {"docs/specs/x.md": "# `parser.py`\n\nSee `parser.py` for the summation logic.\n"},
     )
     finds = repo.doc_findings()
     kinds = {f.evidence["symbol_kind"] for f in finds}
@@ -124,6 +124,68 @@ def test_doc_findings_ignores_unresolvable_and_short_names(tmp_path: Path):
         {"README.md": "# G\n\nThe `run` loop and `nonexistent_symbol` here.\n"},
     )
     # `run` is too short / not a symbol; `nonexistent_symbol` isn't in the graph
+    assert repo.doc_findings() == []
+    repo.close()
+
+
+def test_in_passing_single_mention_is_not_a_candidate(tmp_path: Path):
+    # `calculate_total` named once, not in the heading → reference in passing,
+    # not a claim about it. Prominence gate (heading OR ≥2 mentions) drops it.
+    repo = _repo_with(
+        tmp_path, _CODE,
+        {"README.md": "# Overview\n\nWe call `calculate_total` somewhere.\n"},
+    )
+    assert repo.doc_findings() == []
+    repo.close()
+
+
+def test_prominence_via_repeated_mention(tmp_path: Path):
+    repo = _repo_with(
+        tmp_path, _CODE,
+        {"README.md": "# Money\n\n`calculate_total` sums prices; call "
+                      "`calculate_total` per order.\n"},
+    )
+    finds = repo.doc_findings()
+    assert len(finds) == 1 and finds[0].evidence["symbol_name"] == "calculate_total"
+    repo.close()
+
+
+def test_generated_doc_is_skipped(tmp_path: Path):
+    repo = _repo_with(
+        tmp_path, _CODE,
+        {"README.md": "# `calculate_total`\n\n<!-- generated -->\nAuto-generated. "
+                      "`calculate_total` sums prices.\n"},
+    )
+    assert repo.doc_findings() == []  # generated-marker in head → skipped
+    repo.close()
+
+
+def test_dated_history_doc_is_skipped(tmp_path: Path):
+    repo = _repo_with(
+        tmp_path, _CODE,
+        {"docs/specs/audit-2026-05-18.md":
+            "# `calculate_total`\n\n`calculate_total` summed prices back then.\n"},
+    )
+    assert repo.doc_findings() == []  # dated filename → append-only record
+    repo.close()
+
+
+def test_test_symbol_mention_is_excluded(tmp_path: Path):
+    # a spec section that prominently names a TEST symbol is not the doc-audit
+    # signal (OD-2 test/prod separation) — resolved test symbols are dropped.
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_thing.py").write_text(
+        "def test_summation():\n    assert True\n"
+    )
+    (tmp_path / "parser.py").write_text(_CODE)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "specs").mkdir()
+    (tmp_path / "docs" / "specs" / "s.md").write_text(
+        "# `test_summation`\n\n`test_summation` checks the sum in "
+        "`tests/test_thing.py`.\n"
+    )
+    repo = Repo(tmp_path, backend=SqliteBackend(":memory:", vector_dim=8))
+    repo.scan()
     assert repo.doc_findings() == []
     repo.close()
 
@@ -146,7 +208,7 @@ def test_mention_index_drops_ambiguous_names(tmp_path: Path):
 def test_confirm_doc_description_stale(tmp_path: Path):
     repo = _repo_with(
         tmp_path, _CODE,
-        {"README.md": "# G\n\n`calculate_total` returns the *average* price.\n"},
+        {"README.md": "# `calculate_total`\n\nThe `calculate_total` helper returns the *average* price.\n"},
     )
     f = repo.doc_findings()[0]
     llm = _ScriptedLLM([(_NEEDLE, _verdict_json("wrong", True, 0.9, "sums, not averages"))])
@@ -160,7 +222,7 @@ def test_confirm_doc_description_stale(tmp_path: Path):
 def test_confirm_doc_description_accurate(tmp_path: Path):
     repo = _repo_with(
         tmp_path, _CODE,
-        {"README.md": "# G\n\n`calculate_total` sums item prices.\n"},
+        {"README.md": "# `calculate_total`\n\nThe `calculate_total` helper sums item prices.\n"},
     )
     f = repo.doc_findings()[0]
     llm = _ScriptedLLM([(_NEEDLE, _verdict_json("accurate", False, 0.95, "matches"))])
@@ -172,7 +234,7 @@ def test_confirm_doc_description_accurate(tmp_path: Path):
 def test_confirm_doc_description_caches_and_read_only_accessor(tmp_path: Path):
     repo = _repo_with(
         tmp_path, _CODE,
-        {"README.md": "# G\n\n`calculate_total` returns a count.\n"},
+        {"README.md": "# `calculate_total`\n\n`calculate_total` returns a count.\n"},
     )
     f = repo.doc_findings()[0]
     llm = _ScriptedLLM([(_NEEDLE, _verdict_json("stale", True, 0.8, "drifted"))])
@@ -199,7 +261,7 @@ def test_doc_findings_excludes_missing_symbol_body_gracefully(tmp_path: Path):
     # a doc.divergence pointing at a guid not in the graph → accurate/no-op
     repo = _repo_with(
         tmp_path, _CODE,
-        {"README.md": "# G\n\n`calculate_total` sums prices.\n"},
+        {"README.md": "# `calculate_total`\n\n`calculate_total` sums prices.\n"},
     )
     f = repo.doc_findings()[0].model_copy(
         update={"evidence": {**repo.doc_findings()[0].evidence,

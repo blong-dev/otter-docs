@@ -71,6 +71,42 @@ def is_tsx(path: str | Path) -> bool:
     return Path(path).suffix.lower() == ".tsx"
 
 
+# Directory names that mark test code across ecosystems. Kept conservative:
+# `spec`/`specs` is deliberately excluded — `docs/specs/` is design docs, not
+# tests, and would cause false exclusions.
+_TEST_DIR_PARTS = {"tests", "test", "__tests__", "testdata"}
+
+
+def is_test_path(path: str | Path) -> bool:
+    """True if `path` is test code (fixtures, unit/integration tests).
+
+    Production-focused renders exclude it by default so test fixtures — which
+    naturally have huge function counts and high fan-in — don't dominate the
+    "largest modules" / "call-graph hubs" signal. Language-aware:
+
+    - directory segment: ``tests`` / ``test`` / ``__tests__`` / ``testdata``
+    - Python:  ``test_*.py``, ``*_test.py``, ``conftest.py``
+    - Go:      ``*_test.go``
+    - JS/TS:   ``*.test.{ts,tsx,js,jsx,mjs,cjs}``, ``*.spec.{…}``
+    """
+    p = Path(path)
+    if {part.lower() for part in p.parts} & _TEST_DIR_PARTS:
+        return True
+    name = p.name.lower()
+    if name == "conftest.py":
+        return True
+    stem, suffix = p.stem.lower(), p.suffix.lower()
+    if suffix == ".py" and (stem.startswith("test_") or stem.endswith("_test")):
+        return True
+    if suffix == ".go" and stem.endswith("_test"):
+        return True
+    if suffix in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"} and (
+        ".test." in name or ".spec." in name
+    ):
+        return True
+    return False
+
+
 def iter_source_files(
     root: str | Path,
     *,

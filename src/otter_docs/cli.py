@@ -18,6 +18,7 @@ later version can add `--llm-url` once we've nailed the config story.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -105,6 +106,8 @@ def cmd_find(args: argparse.Namespace) -> int:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
+    if getattr(args, "include_tests", False):
+        os.environ["OTTER_INCLUDE_TESTS"] = "1"
     repo = _open_repo(args.path)
     try:
         repo.scan()
@@ -332,6 +335,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--section", help="render just this section to stdout")
     sp.add_argument("--out", default="SYSTEM.md", help="document filename")
     sp.add_argument("--no-resolve", action="store_true")
+    sp.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="include test code in system_overview / architecture_smells "
+        "(default: production only)",
+    )
     sp.set_defaults(func=cmd_render)
 
     sp = sub.add_parser(

@@ -28,7 +28,7 @@ def _repo(tmp_path: Path) -> Repo:
 
 
 def test_all_renderers_registered():
-    """Code-graph renderers (5) + infra-layer renderers (5)."""
+    """Code-graph renderers (5) + infra-layer renderers (5) + grade (OD-6)."""
     assert set(registry()) == {
         # code-graph (Phase 9)
         "system_overview",
@@ -42,6 +42,8 @@ def test_all_renderers_registered():
         "license",
         "source_layout",
         "tests",
+        # senior-dev grade (OD-6)
+        "grade",
     }
 
 

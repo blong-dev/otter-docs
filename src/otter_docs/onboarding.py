@@ -158,6 +158,8 @@ class OnboardResult:
     enriched: bool = False
     findings: int = 0
     assigned_guids: int = 0
+    grade_letter: str | None = None
+    grade_score: float | None = None
     degradations: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     seconds: float = 0.0
@@ -252,6 +254,14 @@ def onboard_repo(entry: RepoEntry, models: ModelConfig) -> OnboardResult:
 
             repo.render_document(root / entry.doc)
             result.findings = len(repo.findings())
+            # Grade the repo (deterministic, no LLM) and record it on the
+            # heartbeat + document so the "senior-dev review" is visible.
+            try:
+                report = repo.grade()
+                result.grade_letter = report.overall_letter
+                result.grade_score = report.overall_score
+            except Exception as e:
+                result.degradations.append(f"grade failed: {type(e).__name__}: {e}")
 
         if entry.install_hooks:
             written = install_hooks(root, out=entry.doc)
@@ -351,6 +361,8 @@ def _write_heartbeat(
             "enriched": result.enriched,
             "findings": result.findings,
             "assigned_guids": result.assigned_guids,
+            "grade_letter": result.grade_letter,
+            "grade_score": result.grade_score,
             "degradations": result.degradations,
             "errors": result.errors,
             "seconds": result.seconds,
@@ -461,6 +473,7 @@ class RepoStatus:
     degradations: list[str]
     errors: list[str]
     stale: bool
+    grade_letter: str | None = None
 
 
 def collect_status(
@@ -509,6 +522,7 @@ def collect_status(
             degradations=list(d.get("degradations", [])),
             errors=list(d.get("errors", [])),
             stale=stale,
+            grade_letter=d.get("grade_letter"),
         ))
     return out
 

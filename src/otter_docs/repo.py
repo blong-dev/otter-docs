@@ -11,7 +11,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from otter_docs.agent.schemas import GradeReport
 
 from otter_docs.backends import GraphBackend, SqliteBackend
 from otter_docs.clients.base import EmbeddingClient, LLMClient
@@ -567,6 +570,24 @@ class Repo:
             self._description_verdict_cache = InMemoryDescriptionVerdictCache()
         return self._description_verdict_cache
 
+    def grade(self) -> "GradeReport":
+        """A senior-dev-style health grade for this repo — an overall letter,
+        per-dimension breakdown, and the ranked top findings.
+
+        Deterministic: derived from the findings already in the graph
+        (kind → dimension → penalty arithmetic), no LLM call and no re-scan.
+        Run `scan()`/`resolve()`/`enrich()` first for the richest signal;
+        dimensions whose detectors never ran are marked *unassessed*, not
+        perfect. This is the "senior-dev review" surfaced to humans + the
+        fleet status, not just an internal API."""
+        # Lazy import: agent.harness imports Repo, so a module-level import
+        # here would cycle.
+        from otter_docs.agent.harness import Harness
+
+        return Harness(repo=self).run(
+            do_scan=False, do_resolve=False, do_enrich=False, propose=False
+        )
+
     def review_change(
         self,
         diff: str,
@@ -679,6 +700,7 @@ class Repo:
             # code-graph overview, then findings.
             order = [
                 "readme",
+                "grade",
                 "dependencies",
                 "license",
                 "source_layout",

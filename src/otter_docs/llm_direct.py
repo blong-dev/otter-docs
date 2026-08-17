@@ -247,6 +247,47 @@ Return JSON only — no commentary, no fenced block.
 """
 
 
+_CONFIRM_DOC_DESCRIPTION_PROMPT = """\
+A passage of hand-written documentation references a piece of code. Read the
+passage and the code's current form, and judge whether the documentation still
+describes it correctly.
+
+Documentation: {doc_path} § {heading}
+\"\"\"
+{section_text}
+\"\"\"
+
+References {symbol_kind} `{symbol_name}` ({symbol_path}), current code:
+```{language}
+{source}
+```
+
+Judge ONLY the claims the passage makes about `{symbol_name}`. Ignore claims
+about other code, aspirational/roadmap prose, and wording style.
+
+Pick exactly one label:
+  - "accurate"   — what the passage says about this code is still true.
+  - "partial"    — true but materially incomplete about this code (omits
+                   significant behavior). Correct-but-incomplete.
+  - "stale"      — describes behavior this code no longer has; the code moved
+                   on and the doc didn't.
+  - "wrong"      — contradicts the code: claims something it doesn't do (never
+                   did, or no longer does).
+
+If the passage only mentions the symbol in passing and makes no checkable claim
+about its behavior, that is "accurate". Only flag "stale"/"wrong" when the doc
+would actively mislead someone reading this code.
+
+Return a JSON object with these exact fields:
+  is_stale    true only when label is "stale" or "wrong"
+  confidence  your certainty in the label, 0.0 to 1.0
+  kind        the label string
+  reason      one sentence justifying the call
+
+Return JSON only — no commentary, no fenced block.
+"""
+
+
 _REVIEW_PROMPT = """\
 You are reviewing a proposed change to a codebase.
 
@@ -617,6 +658,174 @@ def cached_description_verdict(
         return None
     from otter_docs.verdictcache import verdict_content_hash
     return cache.get_any(verdict_content_hash(docstring, src))
+
+
+def _read_symbol_source(
+    graph: GraphBackend,
+    repo: str,
+    repo_root: Path,
+    *,
+    symbol_kind: str,
+    symbol_guid: str,
+    symbol_path: str,
+) -> tuple[str | None, str]:
+    """Return (current source, language) for a doc-referenced symbol.
+
+    Functions and classes read their def slice (ClassRecord shares
+    module_path/line/end_line, so `_read_slice` is duck-typed over it);
+    modules read the file header (bounded) since a doc claim about a module
+    is about its whole surface.
+    """
+    if symbol_kind == "function":
+        fn = graph.get_function(repo, symbol_guid)
+        if fn is None:
+            return None, "text"
+        return _read_slice(repo_root, fn), _infer_language(graph, repo, fn)
+    if symbol_kind == "class":
+        cls = graph.get_class(repo, symbol_guid)
+        if cls is None:
+            return None, "text"
+        src = _read_slice(repo_root, cls)  # type: ignore[arg-type]
+        module = graph.get_module(repo, cls.module_path)
+        lang = _module_language(module)
+        return src, lang
+    if symbol_kind == "module":
+        module = graph.get_module(repo, symbol_path)
+        lang = _module_language(module)
+        try:
+            text = (repo_root / symbol_path).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            return None, lang
+        # bound the prompt: the header carries the module's public shape
+        return "\n".join(text.splitlines()[:200]), lang
+    return None, "text"
+
+
+def _module_language(module: Any) -> str:
+    if module is None:
+        return "text"
+    lang = getattr(module, "language", None)
+    if lang is None:
+        return "text"
+    return lang.value if hasattr(lang, "value") else str(lang)
+
+
+def confirm_doc_description(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    llm: LLMClient,
+    llm_options: dict[str, Any] | None = None,
+    cache: Any = None,  # DescriptionVerdictCache
+) -> DescriptionVerdict:
+    """Ask the LLM whether a hand-written doc passage still describes the code
+    it names (OD-4b). The prose sibling of `confirm_description`: the candidate
+    is a `doc.divergence` finding (a doc section that mentions a symbol); this
+    reads the section + the symbol's current source and rules accurate /
+    partial / stale / wrong. Consumers gate on `verdict.is_stale`.
+
+    Content-addressed cache by sha1(section_text + symbol_source) + model id —
+    reuses `DescriptionVerdictCache` (distinct key space from the docstring
+    path). Raises ValueError on a non-`doc.divergence` finding.
+    """
+    if finding.kind != "doc.divergence":
+        raise ValueError(
+            f"confirm_doc_description expects a doc.divergence finding, "
+            f"got {finding.kind!r}"
+        )
+    ev = finding.evidence or {}
+    section_text = (ev.get("section_text") or "").strip()
+    symbol_kind = ev.get("symbol_kind") or ""
+    symbol_guid = ev.get("symbol_guid") or ""
+    symbol_path = ev.get("symbol_path") or ""
+    symbol_name = ev.get("symbol_name") or ""
+    heading = ev.get("heading") or "(top)"
+    doc_path = ev.get("doc_path") or (
+        finding.locations[0].path if finding.locations else ""
+    )
+    if not section_text or not symbol_kind:
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason="No documentation claim to check.",
+        )
+
+    src, language = _read_symbol_source(
+        graph, repo, repo_root,
+        symbol_kind=symbol_kind, symbol_guid=symbol_guid, symbol_path=symbol_path,
+    )
+    if not src:
+        return DescriptionVerdict(
+            is_stale=False, confidence=0.0, kind="accurate",
+            reason="Referenced code could not be loaded from the graph/disk.",
+        )
+
+    cache_key: str | None = None
+    model_id: str | None = None
+    if cache is not None:
+        from otter_docs.verdictcache import llm_model_id, verdict_content_hash
+        cache_key = verdict_content_hash(section_text, src)
+        model_id = llm_model_id(llm)
+        try:
+            hit = cache.get(cache_key, llm_model=model_id)
+        except Exception:
+            logger.debug(
+                "doc verdict cache read failed; computing fresh", exc_info=True
+            )
+            hit = None
+        if hit is not None:
+            return hit
+
+    prompt = _CONFIRM_DOC_DESCRIPTION_PROMPT.format(
+        doc_path=doc_path, heading=heading, section_text=section_text,
+        symbol_kind=symbol_kind, symbol_name=symbol_name,
+        symbol_path=symbol_path, language=language, source=src,
+    )
+    raw = llm.complete(
+        prompt, **(llm_options or {"temperature": 0.0, "num_predict": 300})
+    )
+    verdict = _parse_description_verdict(raw)
+
+    if cache is not None and cache_key is not None and model_id is not None:
+        try:
+            cache.put(cache_key, llm_model=model_id, verdict=verdict)
+        except Exception:
+            logger.debug(
+                "doc verdict cache write failed; verdict not persisted",
+                exc_info=True,
+            )
+    return verdict
+
+
+def cached_doc_description_verdict(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    cache: Any,  # DescriptionVerdictCache
+) -> DescriptionVerdict | None:
+    """Read-only sibling of `confirm_doc_description`: the cached verdict
+    without an LLM, or None if this (section, symbol) pair hasn't been judged."""
+    if finding.kind != "doc.divergence":
+        return None
+    ev = finding.evidence or {}
+    section_text = (ev.get("section_text") or "").strip()
+    if not section_text or not (ev.get("symbol_kind")):
+        return None
+    src, _lang = _read_symbol_source(
+        graph, repo, repo_root,
+        symbol_kind=ev.get("symbol_kind") or "",
+        symbol_guid=ev.get("symbol_guid") or "",
+        symbol_path=ev.get("symbol_path") or "",
+    )
+    if not src:
+        return None
+    from otter_docs.verdictcache import verdict_content_hash
+    return cache.get_any(verdict_content_hash(section_text, src))
 
 
 def review_change(

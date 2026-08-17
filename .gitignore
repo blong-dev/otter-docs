@@ -50,3 +50,4 @@ Thumbs.db
 # Project-specific
 logs/
 *.log
+.otter-verdict-cache/

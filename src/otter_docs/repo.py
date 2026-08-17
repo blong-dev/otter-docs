@@ -35,13 +35,19 @@ from otter_docs.llm_direct import (
     cached_description_verdict as _cached_description_verdict,
 )
 from otter_docs.llm_direct import (
-    confirm_description as _confirm_description,
-)
-from otter_docs.llm_direct import (
-    confirm_redundancy as _confirm_redundancy,
+    cached_doc_description_verdict as _cached_doc_description_verdict,
 )
 from otter_docs.llm_direct import (
     cached_redundancy_verdict as _cached_redundancy_verdict,
+)
+from otter_docs.llm_direct import (
+    confirm_description as _confirm_description,
+)
+from otter_docs.llm_direct import (
+    confirm_doc_description as _confirm_doc_description,
+)
+from otter_docs.llm_direct import (
+    confirm_redundancy as _confirm_redundancy,
 )
 from otter_docs.llm_direct import (
     propose_consolidation as _propose_consolidation,
@@ -552,6 +558,62 @@ class Repo:
             cache=self._default_description_verdict_cache(),
         )
 
+    def doc_findings(
+        self,
+        *,
+        doc_globs: tuple[str, ...] | None = None,
+        max_symbols_per_chunk: int = 3,
+    ) -> list[Finding]:
+        """Scan hand-written docs (README / CLAUDE / specs) and return one
+        `doc.divergence` candidate per (doc section, referenced symbol) — a
+        prose passage that names a code symbol (OD-4b). Pure I/O + graph
+        lookups, no LLM; feed each finding to `confirm_doc_description` to rule
+        accurate/stale/wrong.
+
+        Not a registered detector: detectors receive only `(repo, graph)`,
+        but this reads `.md` off disk (via this repo's `root`). The mention
+        link is deterministic (backtick spans / paths / links → graph
+        symbols), so precision comes from the reference itself, not a cosine
+        guess. `doc_globs` defaults to `docscan.DEFAULT_DOC_GLOBS`."""
+        from otter_docs.docscan import DEFAULT_DOC_GLOBS, build_doc_findings
+        return build_doc_findings(
+            self.name,
+            self.root,
+            self._backend,
+            doc_globs=doc_globs or DEFAULT_DOC_GLOBS,
+            max_symbols_per_chunk=max_symbols_per_chunk,
+        )
+
+    def confirm_doc_description(
+        self, finding: Finding, llm: LLMClient
+    ) -> DescriptionVerdict:
+        """LLM judge for a `doc.divergence` finding: does the hand-written doc
+        passage still correctly describe the code symbol it references?
+        Returns a verdict (accurate / partial / stale / wrong); gate on
+        `verdict.is_stale`. Verdicts cache in this repo's graph.db (shared
+        table with `confirm_description`, distinct key space)."""
+        return _confirm_doc_description(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            llm=llm,
+            cache=self._default_description_verdict_cache(),
+        )
+
+    def cached_doc_description_verdict(
+        self, finding: Finding
+    ) -> DescriptionVerdict | None:
+        """The cached `confirm_doc_description` verdict for a finding, or None
+        if this (section, symbol) pair hasn't been judged yet. Read-only."""
+        return _cached_doc_description_verdict(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            cache=self._default_description_verdict_cache(),
+        )
+
     def _default_description_verdict_cache(self) -> Any:
         """Return (and memoize) this repo's description-verdict cache. Mirrors
         `_default_verdict_cache`: SqliteBackend persists in graph.db, other
@@ -570,7 +632,7 @@ class Repo:
             self._description_verdict_cache = InMemoryDescriptionVerdictCache()
         return self._description_verdict_cache
 
-    def grade(self) -> "GradeReport":
+    def grade(self) -> GradeReport:
         """A senior-dev-style health grade for this repo — an overall letter,
         per-dimension breakdown, and the ranked top findings.
 

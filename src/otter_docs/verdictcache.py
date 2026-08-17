@@ -65,6 +65,13 @@ class RedundancyCache(Protocol):
         self, content_hash: str, *, llm_model: str
     ) -> RedundancyVerdict | None: ...
 
+    def get_any(self, content_hash: str) -> RedundancyVerdict | None:
+        """Model-agnostic read: the most recent verdict for this content
+        hash regardless of which LLM produced it. For consumers with no
+        LLM handle (e.g. the renderer) that want to reflect confirmed
+        verdicts. Returns None if nothing is cached for the hash."""
+        ...
+
     def put(
         self,
         content_hash: str,
@@ -111,6 +118,22 @@ class SqliteRedundancyCache:
             reason=row[3],
         )
 
+    def get_any(self, content_hash: str) -> RedundancyVerdict | None:
+        row = self._conn.execute(
+            "SELECT is_duplicate, confidence, kind, reason "
+            "FROM redundancy_verdicts WHERE content_hash = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (content_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        return RedundancyVerdict(
+            is_duplicate=bool(row[0]),
+            confidence=float(row[1]),
+            kind=row[2],
+            reason=row[3],
+        )
+
     def put(
         self,
         content_hash: str,
@@ -144,6 +167,13 @@ class InMemoryRedundancyCache:
         self, content_hash: str, *, llm_model: str
     ) -> RedundancyVerdict | None:
         return self._d.get((content_hash, llm_model))
+
+    def get_any(self, content_hash: str) -> RedundancyVerdict | None:
+        # Most-recent insertion wins (dict preserves insertion order).
+        for (ch, _model), verdict in reversed(self._d.items()):
+            if ch == content_hash:
+                return verdict
+        return None
 
     def put(
         self,

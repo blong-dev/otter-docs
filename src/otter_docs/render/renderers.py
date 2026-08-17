@@ -9,7 +9,7 @@ produce minimal diffs.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from otter_docs.render.base import register
 
@@ -82,34 +82,75 @@ class FindingsSummaryRenderer:
 
 
 class RedundancyReportRenderer:
-    """semantic_equivalence pairs, ranked, with the canonical/redundant call."""
+    """Confirmed duplicate pairs only.
+
+    The semantic_equivalence detector is high-recall — many candidate pairs
+    turn out to be siblings, shared patterns, or same-name idioms (an `envOr`
+    helper in two Go modules, a local `decorator` inside two decorator
+    factories). This renderer consults the cached `confirm_redundancy`
+    verdicts and lists only pairs confirmed as real duplicates, with a
+    concrete consolidation target. Reclassified and not-yet-confirmed
+    candidates are summarised, not listed as redundant."""
 
     name = "redundancy_report"
 
     def render(self, repo: Repo) -> str:
-        findings = [
-            f for f in repo.findings(kinds={"redundancy.semantic_equivalence"})
-        ]
+        findings = list(repo.findings(kinds={"redundancy.semantic_equivalence"}))
         if not findings:
             return (
                 "No redundancy findings. Note: this needs enrich() — "
                 "without embeddings the semantic_equivalence detector "
                 "produces nothing."
             )
-        findings.sort(key=lambda f: f.confidence, reverse=True)
-        lines = [f"{len(findings)} likely-redundant pairs.", ""]
-        for f in findings[:50]:
-            names = f.evidence.get("function_names", ["?", "?"])
-            sim = f.evidence.get("description_similarity", f.confidence)
-            locs = " ↔ ".join(
-                f"`{loc.path}`:{loc.line}" for loc in f.locations[:2]
+
+        confirmed: list[tuple[Any, Any]] = []
+        reclassified = 0
+        unconfirmed = 0
+        for f in findings:
+            verdict = repo.cached_redundancy_verdict(f)
+            if verdict is None:
+                unconfirmed += 1
+            elif verdict.is_duplicate:
+                confirmed.append((f, verdict))
+            else:
+                reclassified += 1
+        confirmed.sort(key=lambda fv: fv[1].confidence, reverse=True)
+
+        lines: list[str] = []
+        if confirmed:
+            lines.append(f"{len(confirmed)} confirmed duplicate pair(s).")
+            lines.append("")
+            for f, v in confirmed[:50]:
+                names = f.evidence.get("function_names", ["?", "?"])
+                locs = f.locations[:2]
+                a = f"`{locs[0].path}`:{locs[0].line}" if locs else "`?`"
+                b = (
+                    f"`{locs[1].path}`:{locs[1].line}"
+                    if len(locs) > 1
+                    else "`?`"
+                )
+                lines.append(
+                    f"- **{names[0]}** ↔ **{names[1]}** "
+                    f"(confidence {v.confidence:.2f}) — {a} ↔ {b}"
+                )
+                lines.append(f"  - Consolidate the two copies ({a} / {b}).")
+        else:
+            lines.append("No confirmed duplicates.")
+
+        tail: list[str] = []
+        if reclassified:
+            tail.append(
+                f"{reclassified} candidate(s) reclassified as "
+                "sibling / shared-pattern / coincidental"
             )
-            lines.append(
-                f"- **{names[0]}** ↔ **{names[1]}** "
-                f"(sim {sim:.2f}) — {locs}"
+        if unconfirmed:
+            tail.append(
+                f"{unconfirmed} candidate(s) pending confirmation "
+                "(run the confirm pass)"
             )
-            if f.recommendation:
-                lines.append(f"  - {f.recommendation.summary}")
+        if tail:
+            lines.append("")
+            lines.append("_" + "; ".join(tail) + "._")
         return "\n".join(lines)
 
 

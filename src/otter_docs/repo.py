@@ -28,7 +28,11 @@ from otter_docs.llm_direct import (
     Review,
 )
 from otter_docs.llm_direct import (
+    RedundancyVerdict,
     confirm_redundancy as _confirm_redundancy,
+)
+from otter_docs.llm_direct import (
+    cached_redundancy_verdict as _cached_redundancy_verdict,
 )
 from otter_docs.llm_direct import (
     propose_consolidation as _propose_consolidation,
@@ -467,6 +471,22 @@ class Repo:
             graph=self._backend,
             llm=llm,
             cache=cache if cache is not None else self._default_verdict_cache(),
+        )
+
+    def cached_redundancy_verdict(
+        self, finding: Finding
+    ) -> RedundancyVerdict | None:
+        """The cached `confirm_redundancy` verdict for a redundancy finding,
+        or None if it hasn't been confirmed yet. Read-only (no LLM call) —
+        reflects whatever the publisher / confirm pass stored in this repo's
+        verdict cache. Used by the redundancy renderer to show confirmed
+        duplicates only and summarise the rest."""
+        return _cached_redundancy_verdict(
+            finding=finding,
+            repo=self.name,
+            repo_root=self.root,
+            graph=self._backend,
+            cache=self._default_verdict_cache(),
         )
 
     def _default_verdict_cache(self) -> Any:

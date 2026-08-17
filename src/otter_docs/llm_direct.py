@@ -396,6 +396,40 @@ def confirm_redundancy(
     return verdict
 
 
+def cached_redundancy_verdict(
+    *,
+    finding: Finding,
+    repo: str,
+    repo_root: Path,
+    graph: GraphBackend,
+    cache: Any,  # RedundancyCache
+) -> RedundancyVerdict | None:
+    """Read-only sibling of `confirm_redundancy`: return the cached verdict
+    for a redundancy.* finding **without an LLM**, or None if none has been
+    cached yet.
+
+    Uses the same content-addressed key (sha1 of the two function bodies) as
+    `confirm_redundancy`, so it reflects whatever the publisher / confirm pass
+    stored — model-agnostic (via `cache.get_any`). Lets an LLM-less consumer
+    (e.g. the redundancy renderer) show confirmed duplicates and hide
+    high-recall candidates that were reclassified as siblings / coincidental.
+    Returns None (not an error) on a non-redundancy finding, missing functions,
+    or unreadable source — the caller treats None as "unconfirmed".
+    """
+    if not finding.kind.startswith("redundancy.") or len(finding.locations) < 2:
+        return None
+    a_fn = _fetch_function(graph, repo, finding.locations[0].guid)
+    b_fn = _fetch_function(graph, repo, finding.locations[1].guid)
+    if a_fn is None or b_fn is None:
+        return None
+    a_src = _read_slice(repo_root, a_fn)
+    b_src = _read_slice(repo_root, b_fn)
+    if a_src is None or b_src is None:
+        return None
+    from otter_docs.verdictcache import verdict_content_hash
+    return cache.get_any(verdict_content_hash(a_src, b_src))
+
+
 def review_change(
     *,
     diff: str,

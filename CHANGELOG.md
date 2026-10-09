@@ -5,6 +5,22 @@ All notable changes to **otter-docs** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`otter-docs delta` / `otter_docs.delta`** — the per-commit witness.
+  `symbol_delta(root, base=, head=)` and `commit_delta(root, sha)` parse
+  the two blobs of every changed source file straight out of git (no
+  checkout, no graph.db) and report, per symbol and keyed by guid, what
+  the range did: `added` / `modified` / `removed` / `moved`. Marked
+  symbols keep their identity across moves; unmarked symbols are matched
+  by (path, kind, name) when unambiguous so a line shift alone is not a
+  change, and every row says which identity rule applied (`marked`).
+  The delta is the join a host needs between code and intent: the host
+  attaches the commit's *why* (a card, a ticket, a prompt); otter-docs
+  only emits the *what*. `--json` for machines, text for people.
+
 ## [0.1.0] — 2026-05-21
 
 ### Added

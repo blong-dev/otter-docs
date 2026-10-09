@@ -18,8 +18,8 @@ later version can add `--llm-url` once we've nailed the config story.
 from __future__ import annotations
 
 import argparse
-import os
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -305,6 +305,47 @@ def cmd_systemd(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_delta(args: argparse.Namespace) -> int:
+    """Symbol-level delta of a revision range (the per-commit witness)."""
+    import json as _json
+    import subprocess
+
+    from otter_docs.delta import commit_delta, symbol_delta
+
+    root = Path(args.path).resolve()
+    try:
+        if args.commit:
+            delta = commit_delta(root, args.commit, repo=args.repo)
+        else:
+            delta = symbol_delta(
+                root, base=args.base, head=args.head, repo=args.repo,
+            )
+    except subprocess.CalledProcessError as e:
+        msg = (e.stderr or b"").decode("utf-8", "replace").strip() or str(e)
+        print(f"delta: git failed: {msg}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(_json.dumps(delta.to_dict(), indent=2))
+        return 0
+    c = delta.counts()
+    print(
+        f"delta {delta.repo} {delta.base[:12]}..{delta.head[:12]}: "
+        f"{len(delta.files)} files ({len(delta.source_files)} source), "
+        f"+{c['added']} ~{c['modified']} -{c['removed']} >{c['moved']} symbols"
+        + (f", {c['unmarked']} unmarked" if c["unmarked"] else "")
+    )
+    for ch in delta.changes:
+        tag = {"added": "+", "modified": "~", "removed": "-", "moved": ">"}[ch.change]
+        where = f"{ch.path}:{ch.line}" if ch.line else ch.path
+        extra = f"  (from {ch.from_path})" if ch.from_path else ""
+        mark = "" if ch.marked else "  [unmarked]"
+        print(f"  {tag} {ch.kind} {ch.name}  {where}  {ch.guid}{extra}{mark}")
+    for path, msg in delta.errors:
+        print(f"    error: {path}: {msg}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="otter-docs", description="Polyglot codebase inspection.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -361,6 +402,20 @@ def build_parser() -> argparse.ArgumentParser:
              "(still inserts them — pair with `git diff` for a pure check)",
     )
     sp.set_defaults(func=cmd_assign_guids)
+
+    sp = sub.add_parser(
+        "delta",
+        help="symbol-level delta of a revision range, keyed by guid (the per-commit witness)",
+    )
+    sp.add_argument("path", nargs="?", default=".", help="git repo root")
+    sp.add_argument("--commit", help="one commit, diffed against its first parent")
+    sp.add_argument("--from", dest="base", default="HEAD^",
+                    help="base revision (default HEAD^; ignored with --commit)")
+    sp.add_argument("--to", dest="head", default="HEAD",
+                    help="head revision (default HEAD; ignored with --commit)")
+    sp.add_argument("--repo", help="repo name for the records (default: directory name)")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp.set_defaults(func=cmd_delta)
 
     sp = sub.add_parser("install-hooks", help="install git pre-commit/pre-push hooks")
     add_path(sp)

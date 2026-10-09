@@ -21,6 +21,7 @@ otter-docs scan .            # tree-sitter AST → graph
 otter-docs find .            # static findings (dead_code, large_function, …)
 otter-docs render .          # write SYSTEM.md with marker-based injection
 otter-docs install-hooks .   # pre-commit + pre-push
+otter-docs delta . --commit HEAD   # what this commit did, per symbol, by guid
 ```
 
 Or from Python:

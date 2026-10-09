@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (staged, unstaged and untracked source files): what a reviewer sees
   before the commit exists.
 
+### Fixed
+
+- Pin `tree-sitter` below 0.26. The 0.26 runtime segfaults walking nodes
+  produced by the 0.25 grammars (Python `_cyclomatic`), so a fresh install
+  crashed on the first parse.
+
 ## [0.1.0] — 2026-05-21
 
 ### Added

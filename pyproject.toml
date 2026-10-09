@@ -35,7 +35,9 @@ classifiers = [
 dependencies = [
     "pydantic>=2.6",
     "sqlite-vec>=0.1.6",
-    "tree-sitter>=0.23",
+    # <0.26: the 0.26 runtime segfaults walking nodes from the 0.25 grammars
+    # (found building the Quorum agent image, 2026-10-09). Raise with the grammars.
+    "tree-sitter>=0.23,<0.26",
     "tree-sitter-python>=0.23",
     "tree-sitter-go>=0.23",
     "tree-sitter-typescript>=0.23",

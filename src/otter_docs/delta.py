@@ -47,6 +47,11 @@ from otter_docs.parsers import parse_file
 # The empty tree: diffing against it makes a root commit's delta "everything added".
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+# The working tree as the head side: what is on disk right now (staged, unstaged
+# and untracked source files) against a committed base. This is what a reviewer
+# sees before the commit exists.
+WORKTREE = "WORKTREE"
+
 _MARKER_GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 CHANGE_KINDS = ("added", "modified", "removed", "moved")
@@ -84,7 +89,7 @@ class SymbolDelta:
 
     repo: str
     base: str  # resolved full sha (or EMPTY_TREE)
-    head: str  # resolved full sha
+    head: str  # resolved full sha, or "WORKTREE"
     files: list[str] = field(default_factory=list)  # every changed path, any type
     source_files: list[str] = field(default_factory=list)  # the parsed subset
     changes: list[SymbolChange] = field(default_factory=list)
@@ -133,6 +138,11 @@ def resolve_rev(root: str | Path, rev: str) -> str:
 
 
 def _blob(root: Path, rev: str, path: str) -> bytes | None:
+    if rev == WORKTREE:
+        try:
+            return (root / path).read_bytes()
+        except OSError:
+            return None
     try:
         return _git(root, "show", f"{rev}:{path}")
     except subprocess.CalledProcessError:
@@ -143,9 +153,17 @@ def _changed_paths(root: Path, base: str, head: str) -> list[tuple[str, str | No
     """(status, from_path, to_path) per changed file, renames detected.
 
     status is git's letter: A M D R C T. For A from_path is None; for
-    D to_path is None; for R/C both are set.
+    D to_path is None; for R/C both are set. With head == WORKTREE the
+    diff is base..working tree, plus untracked (not ignored) files as A.
     """
-    raw = _git(root, "diff", "--name-status", "-M", "-z", base, head).decode("utf-8", "replace")
+    if head == WORKTREE:
+        raw = _git(root, "diff", "--name-status", "-M", "-z", base).decode("utf-8", "replace")
+        untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z").decode("utf-8", "replace")
+        for path in untracked.split("\0"):
+            if path:
+                raw += f"A\0{path}\0"
+    else:
+        raw = _git(root, "diff", "--name-status", "-M", "-z", base, head).decode("utf-8", "replace")
     parts = [p for p in raw.split("\0")]
     out: list[tuple[str, str | None, str | None]] = []
     i = 0
@@ -298,12 +316,14 @@ def symbol_delta(
 ) -> SymbolDelta:
     """Compute the symbol delta of `base..head` in the git repo at `root`.
 
-    `base` may be `EMPTY_TREE` for a root commit. Both revisions are
-    resolved to full shas; the result is stable for a given pair.
+    `base` may be `EMPTY_TREE` for a root commit; `head` may be `WORKTREE`
+    for the working tree as it is on disk (then `head` in the result is the
+    literal "WORKTREE" and the delta is only as stable as the tree). Committed
+    revisions are resolved to full shas; the result is stable for a given pair.
     """
     root = Path(root).resolve()
     repo_name = repo or root.name
-    head_sha = resolve_rev(root, head)
+    head_sha = WORKTREE if head == WORKTREE else resolve_rev(root, head)
     base_sha = base if base == EMPTY_TREE else resolve_rev(root, base)
 
     delta = SymbolDelta(repo=repo_name, base=base_sha, head=head_sha)

@@ -318,9 +318,9 @@ def cmd_delta(args: argparse.Namespace) -> int:
         if args.commit:
             delta = commit_delta(root, args.commit, repo=args.repo)
         else:
-            delta = symbol_delta(
-                root, base=args.base, head=args.head, repo=args.repo,
-            )
+            from otter_docs.delta import WORKTREE
+            base = args.base or ("HEAD" if args.head == WORKTREE else "HEAD^")
+            delta = symbol_delta(root, base=base, head=args.head, repo=args.repo)
     except subprocess.CalledProcessError as e:
         msg = (e.stderr or b"").decode("utf-8", "replace").strip() or str(e)
         print(f"delta: git failed: {msg}", file=sys.stderr)
@@ -409,10 +409,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("path", nargs="?", default=".", help="git repo root")
     sp.add_argument("--commit", help="one commit, diffed against its first parent")
-    sp.add_argument("--from", dest="base", default="HEAD^",
-                    help="base revision (default HEAD^; ignored with --commit)")
+    sp.add_argument("--from", dest="base", default=None,
+                    help="base revision (default HEAD^, or HEAD when --to WORKTREE; ignored with --commit)")
     sp.add_argument("--to", dest="head", default="HEAD",
-                    help="head revision (default HEAD; ignored with --commit)")
+                    help="head revision (default HEAD; WORKTREE = the working tree on disk; "
+                         "ignored with --commit)")
     sp.add_argument("--repo", help="repo name for the records (default: directory name)")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp.set_defaults(func=cmd_delta)

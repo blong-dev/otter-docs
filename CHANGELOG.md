@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The delta is the join a host needs between code and intent: the host
   attaches the commit's *why* (a card, a ticket, a prompt); otter-docs
   only emits the *what*. `--json` for machines, text for people.
+  `--to WORKTREE` diffs a committed base against the working tree on disk
+  (staged, unstaged and untracked source files): what a reviewer sees
+  before the commit exists.
 
 ## [0.1.0] — 2026-05-21
 

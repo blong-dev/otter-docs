@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from otter_docs.cli import main
-from otter_docs.delta import EMPTY_TREE, commit_delta, symbol_delta
+from otter_docs.delta import EMPTY_TREE, WORKTREE, commit_delta, symbol_delta
 
 GUID_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 GUID_K = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
@@ -217,3 +217,31 @@ def test_cli_delta_text_and_json(repo: Path, capsys):
 def test_cli_delta_bad_revision_is_a_clean_error(repo: Path, capsys):
     assert main(["delta", str(repo), "--from", "nope"]) == 2
     assert "git failed" in capsys.readouterr().err
+
+
+# ── the working tree as head: what a reviewer sees before the commit ───
+
+
+def test_worktree_delta_sees_unstaged_and_untracked(repo: Path):
+    (repo / "a.py").write_text(
+        f"# guid:{GUID_A}\ndef marked():\n    return 42\n\n"  # unstaged edit
+        "def plain():\n    return 2\n\n"
+        f"# guid:{GUID_K}\nclass Keeper:\n    def method(self):\n        return 3\n"
+    )
+    (repo / "new.py").write_text("def brand_new():\n    return 1\n")  # untracked
+    d = symbol_delta(repo, base="HEAD", head=WORKTREE)
+    assert d.head == WORKTREE
+    names = _by_name(d)
+    assert names["marked"].change == "modified"
+    assert names["brand_new"].change == "added" and names["brand_new"].path == "new.py"
+    assert "plain" not in names
+    # nothing was committed: HEAD..HEAD is empty
+    assert symbol_delta(repo, base="HEAD", head="HEAD").changes == []
+
+
+def test_cli_worktree(repo: Path, capsys):
+    (repo / "a.py").write_text("def plain():\n    return 2\n")  # marked + Keeper removed on disk
+    assert main(["delta", str(repo), "--to", "WORKTREE", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["head"] == "WORKTREE"
+    assert payload["counts"]["removed"] == 3  # marked, Keeper, Keeper.method

@@ -52,6 +52,16 @@ _MARKER_GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 CHANGE_KINDS = ("added", "modified", "removed", "moved")
 
 
+def _tool_version() -> str | None:
+    """otter-docs' own version, recorded with every delta so a consumer can
+    tell which parser produced a row years later."""
+    try:
+        from importlib.metadata import version
+        return version("otter-docs")
+    except Exception:
+        return None
+
+
 @dataclass
 class SymbolChange:
     """One symbol's fate across the delta."""
@@ -84,6 +94,7 @@ class SymbolDelta:
         d = asdict(self)
         d["errors"] = [list(e) for e in self.errors]
         d["counts"] = self.counts()
+        d["tool_version"] = _tool_version()
         return d
 
     def counts(self) -> dict[str, int]:
